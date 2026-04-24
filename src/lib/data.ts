@@ -16,15 +16,24 @@ export function getCurrentUserProjectSheetRole(
   if (project.workspace_type === 'personal') return 'pm';
   if (platformRole === 'admin') return 'pm';
 
+  const mine = project.projectMemberEntries?.find(m => m.profile_id === userId);
+  const isProjectDeveloper =
+    (project.assignedDevIds ?? []).includes(userId) || mine?.workspace_role === 'dev';
+
+  // Browsing …/dev/… should use developer sheet rules when this user is an assigned developer on the
+  // project, even if they are also the PM (`pm_id` would otherwise always win and show the full PM grid).
+  if (platformRole === 'dev' && isProjectDeveloper) {
+    return 'dev';
+  }
+
   if (project.pm_id === userId) return 'pm';
 
-  const mine = project.projectMemberEntries?.find(m => m.profile_id === userId);
   if (mine?.workspace_role === 'pm') return 'pm';
   if (mine?.workspace_role === 'dev') return 'dev';
   if (mine?.workspace_role === 'client') return 'client';
 
   if (project.client_id === userId) return 'client';
-  if (project.assignedDevIds?.includes(userId)) return 'dev';
+  if (isProjectDeveloper) return 'dev';
 
   if (platformRole === 'pm') return 'pm';
   if (platformRole === 'dev') return 'dev';
@@ -89,15 +98,63 @@ export function getAssignableTeamProfiles(): UserProfile[] {
   return out;
 }
 
-/** True if the user is the project PM or listed as a developer (supports PM+dev on the same project). */
+/** Profile IDs listed as developers on the project (team: `project_members.workspace_role = dev`). */
+export function getProjectDeveloperIds(project: Project | null): string[] {
+  return project?.assignedDevIds ?? [];
+}
+
+/** Only profiles assigned as developers to the specific project. */
+export function getProjectDevelopers(project: Project | null): UserProfile[] {
+  const ids = getProjectDeveloperIds(project);
+  if (!project || ids.length === 0) return [];
+  const devs = cachedProfiles.filter(u => ids.includes(u.id));
+  devs.sort((a, b) => a.name.localeCompare(b.name));
+  return devs;
+}
+
+/**
+ * Resolves task assignee to a profile id only if that person is a developer on this project.
+ * Team projects: restrict to `assignedDevIds`. Personal projects: any stored id is kept.
+ * Used so the grid, selects, and DB stay aligned (no "ghost" names for ids outside the dev list).
+ */
+export function getTaskAssigneeProfileIdForProject(row: SheetRow, project: Project | null): string | null {
+  const r = row as Record<string, unknown>;
+  const raw =
+    (typeof r.assignee === 'string' && r.assignee ? r.assignee : null) ??
+    (typeof r.assignee_id === 'string' && r.assignee_id ? r.assignee_id : null);
+  if (!raw) return null;
+  if (!project || project.workspace_type !== 'team') return raw;
+  const allowed = getProjectDeveloperIds(project);
+  return allowed.includes(raw) ? raw : null;
+}
+
+/** Primary PM on `projects.pm_id` or `project_members` row with workspace_role pm. */
+export function userSeesProjectAsPm(userId: string, project: Project): boolean {
+  if (project.pm_id === userId) return true;
+  return project.projectMemberEntries?.some(m => m.profile_id === userId && m.workspace_role === 'pm') ?? false;
+}
+
+/** Listed developer (`assignedDevIds` / project_members dev). */
+export function userSeesProjectAsDev(userId: string, project: Project): boolean {
+  if ((project.assignedDevIds ?? []).includes(userId)) return true;
+  return project.projectMemberEntries?.some(m => m.profile_id === userId && m.workspace_role === 'dev') ?? false;
+}
+
+/** Client stakeholder on `projects.client_id` or project_members client. */
+export function userSeesProjectAsClient(userId: string, project: Project): boolean {
+  if (project.client_id === userId) return true;
+  return project.projectMemberEntries?.some(m => m.profile_id === userId && m.workspace_role === 'client') ?? false;
+}
+
+/** PM or developer access (not client-only). */
 export function userSeesProjectAsTeamMember(userId: string, project: Project): boolean {
-  return project.pm_id === userId || project.assignedDevIds.includes(userId);
+  return userSeesProjectAsPm(userId, project) || userSeesProjectAsDev(userId, project);
 }
 
 export function getProjectCountForUser(userId: string, role: UserProfile['role'], projectList: Project[]): number {
-  if (role === 'pm') return projectList.filter(p => userSeesProjectAsTeamMember(userId, p)).length;
-  if (role === 'dev') return projectList.filter(p => userSeesProjectAsTeamMember(userId, p)).length;
-  if (role === 'client') return projectList.filter(p => p.client_id === userId).length;
+  if (role === 'pm') return projectList.filter(p => userSeesProjectAsPm(userId, p)).length;
+  if (role === 'dev') return projectList.filter(p => userSeesProjectAsDev(userId, p)).length;
+  if (role === 'client') return projectList.filter(p => userSeesProjectAsClient(userId, p)).length;
   return projectList.length;
 }
 

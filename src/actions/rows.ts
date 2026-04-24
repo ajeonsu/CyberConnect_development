@@ -30,7 +30,7 @@ function isValidUUID(uuid: unknown): uuid is string {
   return typeof uuid === 'string' && uuidRegex.test(uuid);
 }
 
-function sanitizeRowData(row: Record<string, unknown>, tableName: string, currentUserId?: string) {
+function sanitizeRowData(row: Record<string, unknown>, tableName: string) {
   const clean: Record<string, unknown> = {}
 
   for (const key in row) {
@@ -118,12 +118,8 @@ function sanitizeRowData(row: Record<string, unknown>, tableName: string, curren
   /** Table-specific mapping fixes */
 
   if (tableName === 'task_rows') {
-    // DB: assignee_id (UUID), frontend: assignee (UUID from select)
-    // If it's still null and DB says NOT NULL, we fallback to current user
-    if (!clean.assignee_id && currentUserId) {
-      clean.assignee_id = currentUserId;
-    }
-    
+    // assignee_id is nullable — do not default to current user (that blocked true "Unassigned" saves)
+
     // Ensure status is never empty
     if (clean.status === null || clean.status === '') clean.status = 'Not started';
     
@@ -203,6 +199,45 @@ async function verifyProjectAccess(supabase: SupabaseClient, projectId: string) 
   return false
 }
 
+/** For team projects, only these profiles may be stored as `task_rows.assignee_id`. */
+async function loadTeamProjectDeveloperIds(
+  supabase: SupabaseClient,
+  projectId: string
+): Promise<string[] | null> {
+  const { data: proj } = await supabase.from('projects').select('workspace_type').eq('id', projectId).single();
+  if (!proj || proj.workspace_type !== 'team') return null;
+  const { data: members } = await supabase
+    .from('project_members')
+    .select('profile_id')
+    .eq('project_id', projectId)
+    .eq('workspace_role', 'dev');
+  return (members ?? []).map(m => m.profile_id);
+}
+
+/**
+ * Supabase returns `assignee_id`; the sheet column key is `assignee`. Without this, fresh loads
+ * show "Unassigned" while rows saved from the detail panel (which send `assignee`) look correct.
+ */
+function shapeTaskRowsForClient(rows: SheetRow[]): SheetRow[] {
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>
+    const aid = r.assignee_id
+    const assigneeVal = r.assignee
+    const hasAssignee =
+      assigneeVal !== undefined &&
+      assigneeVal !== null &&
+      String(assigneeVal).length > 0
+    if (typeof aid === 'string' && aid && !hasAssignee) {
+      return { ...row, assignee: aid } as SheetRow
+    }
+    return row
+  })
+}
+
+function shapeTaskRowForClient(row: SheetRow): SheetRow {
+  return shapeTaskRowsForClient([row])[0]
+}
+
 export async function getSheetRowsAction(projectId: string, tabId: string): Promise<SheetRow[]> {
   const tableName = TABLE_MAP[tabId]
   if (!tableName) return []
@@ -220,8 +255,10 @@ export async function getSheetRowsAction(projectId: string, tabId: string): Prom
     console.error(`getSheetRowsAction error (${tableName}):`, error)
     return []
   }
-  
-  return data as SheetRow[]
+
+  const rows = (data ?? []) as SheetRow[]
+  if (tabId === 'tasks') return shapeTaskRowsForClient(rows)
+  return rows
 }
 
 export async function upsertSheetRowAction(tabId: string, row: Partial<SheetRow> & { id: string; project_id: string }): Promise<SheetRow> {
@@ -234,15 +271,22 @@ export async function upsertSheetRowAction(tabId: string, row: Partial<SheetRow>
   const supabase = await createClient()
   if (!(await verifyProjectAccess(supabase, row.project_id))) throw new Error('Forbidden')
 
-  // Get current user profile ID for fallbacks
-  const { data: profile } = await supabase.from('profiles').select('id').eq('email', session.email).single();
-  const currentUserId = profile?.id;
+  const cleanedData = sanitizeRowData(row, tableName)
 
-  const cleanedData = sanitizeRowData(row, tableName, currentUserId)
+  let payload: Record<string, unknown> = cleanedData
+  if (tableName === 'task_rows') {
+    const allowed = await loadTeamProjectDeveloperIds(supabase, row.project_id);
+    if (allowed !== null) {
+      const aid = cleanedData.assignee_id;
+      if (typeof aid === 'string' && aid && !allowed.includes(aid)) {
+        payload = { ...cleanedData, assignee_id: null };
+      }
+    }
+  }
 
   const { data, error } = await supabase
     .from(tableName)
-    .upsert(cleanedData)
+    .upsert(payload)
     .select()
     .single()
 
@@ -252,7 +296,9 @@ export async function upsertSheetRowAction(tabId: string, row: Partial<SheetRow>
   }
   
   revalidatePath('/')
-  return data as SheetRow
+  const saved = data as SheetRow
+  if (tabId === 'tasks') return shapeTaskRowForClient(saved)
+  return saved
 }
 
 export async function deleteSheetRowAction(tabId: string, projectId: string, rowId: string): Promise<void> {

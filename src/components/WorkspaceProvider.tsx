@@ -7,7 +7,15 @@ import { getSession, logoutAction } from '@/actions/auth';
 import { getProfiles, upgradeToAdminAction, getTeamMembersAction, getMyTeamMembershipsAction, getMyProfileAction, updateMyProfileAction } from '@/actions/profiles';
 import { getProjectsAction, createProjectAction, updateProjectAction, deleteProjectAction, getTeamIdBySlugAction } from '@/actions/projects';
 import { getSheetRowsAction, upsertSheetRowAction, deleteSheetRowAction } from '@/actions/rows';
-import { setCachedProfiles, sheetTabs, userSeesProjectAsTeamMember, type Language } from '@/lib/data';
+import {
+  setCachedProfiles,
+  sheetTabs,
+  userSeesProjectAsTeamMember,
+  userSeesProjectAsPm,
+  userSeesProjectAsDev,
+  userSeesProjectAsClient,
+  type Language,
+} from '@/lib/data';
 import type { UserProfile, Project, SheetRow, UserRole, TeamMembership } from '@/types';
 import { regenerateTeamInviteCodeAction, updateTeamAction } from '@/actions/teams';
 import { clearLoginSessionStorage } from '@/lib/loginSession';
@@ -25,8 +33,6 @@ interface WorkspaceContextType {
   sheetLoadingProjects: Record<string, boolean>;
   language: Language;
   setLanguage: (lang: Language) => void;
-  sidebarCollapsed: boolean;
-  setSidebarCollapsed: (collapsed: boolean) => void;
   handleLogout: () => Promise<void>;
   handleUpdateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   handleAssignMember: (projectId: string, profileId: string, role: string) => Promise<void>;
@@ -65,7 +71,6 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
   const [sheetData, setSheetData] = useState<Record<string, Record<string, SheetRow[]>>>({});
   const [sheetLoadingProjects, setSheetLoadingProjects] = useState<Record<string, boolean>>({});
   const [language, setLanguage] = useState<Language>('en');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     try {
@@ -140,8 +145,14 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
         const scope = pathname.startsWith('/personal') ? 'personal' : 'team';
         const segments = pathname.split('/').filter(Boolean);
         const teamSlug = scope === 'team' ? (params.team_slug as string || segments[0]) : undefined;
+        const bypassProjectFilter = pathname.includes('/admin/dashboard');
 
-        getProjectsAction(scope, undefined, teamSlug).then(async res => {
+        getProjectsAction(
+          scope,
+          undefined,
+          teamSlug,
+          bypassProjectFilter ? { bypassProjectRoleFilter: true } : undefined
+        ).then(async res => {
           setProjects(res);
           setIsLoading(false);
 
@@ -162,6 +173,23 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
             setTeamPool([]);
             setRealtimeTeamId(null);
           }
+
+          // Automatically fetch essential sheet data for the dashboard (tasks and tech_stack)
+          // this ensures the dashboard stats are synced as requested by the user.
+          res.forEach(project => {
+            void getSheetRowsAction(project.id, 'tasks').then(rows => {
+              setSheetData(prev => ({
+                ...prev,
+                [project.id]: { ...(prev[project.id] || {}), tasks: rows }
+              }));
+            });
+            void getSheetRowsAction(project.id, 'tech_stack').then(rows => {
+              setSheetData(prev => ({
+                ...prev,
+                [project.id]: { ...(prev[project.id] || {}), tech_stack: rows }
+              }));
+            });
+          });
         });
       });
     }
@@ -182,7 +210,13 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
       setTeamMemberships(memRes);
       setCachedProfiles(profilesList);
 
-      const projs = await getProjectsAction('team', undefined, teamSlug);
+      const bypassProjectFilter = pathname.includes('/admin/dashboard');
+      const projs = await getProjectsAction(
+        'team',
+        undefined,
+        teamSlug,
+        bypassProjectFilter ? { bypassProjectRoleFilter: true } : undefined
+      );
       setProjects(projs);
 
       let teamId = projs.find(p => p.team_id)?.team_id;
@@ -240,6 +274,78 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     };
   }, [loggedInUser?.id, realtimeTeamId, pathname, syncTeamWorkspaceData]);
 
+  const projectIdsKey = useMemo(
+    () => [...projects].map(p => p.id).sort((a, b) => a.localeCompare(b)).join(','),
+    [projects]
+  );
+
+  // Refetch tasks when task_rows change (other tabs, other roles, or collaborators).
+  useEffect(() => {
+    if (!loggedInUser?.id || !projectIdsKey) return;
+
+    const pendingProjectIds = new Set<string>();
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const flush = () => {
+      debounceTimer = undefined;
+      const ids = [...pendingProjectIds];
+      pendingProjectIds.clear();
+      if (ids.length === 0) return;
+      void Promise.all(
+        ids.map(pid =>
+          getSheetRowsAction(pid, 'tasks').then(rows => ({ pid, rows }))
+        )
+      ).then(results => {
+        setSheetData(prev => {
+          let next = prev;
+          for (const { pid, rows } of results) {
+            next = { ...next, [pid]: { ...(next[pid] || {}), tasks: rows } };
+          }
+          return next;
+        });
+      });
+    };
+
+    const scheduleRefetch = (projectId: string) => {
+      pendingProjectIds.add(projectId);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(flush, 220);
+    };
+
+    const projectIds = projectIdsKey.split(',').filter(Boolean);
+    const channelName = `task-rows:${loggedInUser.id}`;
+    let channel = supabase.channel(channelName);
+    for (const pid of projectIds) {
+      channel = channel.on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'task_rows',
+          filter: `project_id=eq.${pid}`,
+        },
+        (payload) => {
+          const pidFromRow =
+            (payload.new as { project_id?: string } | null)?.project_id ??
+            (payload.old as { project_id?: string } | null)?.project_id;
+          scheduleRefetch(pidFromRow || pid);
+        }
+      );
+    }
+
+    channel.subscribe((status, err) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('task_rows realtime:', status, err);
+      }
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      pendingProjectIds.clear();
+      void supabase.removeChannel(channel);
+    };
+  }, [loggedInUser?.id, projectIdsKey]);
+
   const handleLogout = useCallback(async () => {
     try {
       await supabase.auth.signOut();
@@ -273,10 +379,12 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     const { assignProjectMemberAction } = await import('@/actions/projects');
     await assignProjectMemberAction(projectId, profileId, role);
     const slug = resolveTeamSlugForRefresh();
+    const bypass = pathname.includes('/admin/dashboard');
+    const teamOpts = bypass ? { bypassProjectRoleFilter: true as const } : undefined;
     if (pathname.startsWith('/personal')) {
       getProjectsAction('personal').then(res => setProjects(res));
     } else {
-      getProjectsAction('team', undefined, slug).then(res => setProjects(res));
+      getProjectsAction('team', undefined, slug, teamOpts).then(res => setProjects(res));
     }
   }, [pathname, resolveTeamSlugForRefresh]);
 
@@ -284,10 +392,12 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     const { removeProjectMemberAction } = await import('@/actions/projects');
     await removeProjectMemberAction(projectId, profileId);
     const slug = resolveTeamSlugForRefresh();
+    const bypass = pathname.includes('/admin/dashboard');
+    const teamOpts = bypass ? { bypassProjectRoleFilter: true as const } : undefined;
     if (pathname.startsWith('/personal')) {
       getProjectsAction('personal').then(res => setProjects(res));
     } else {
-      getProjectsAction('team', undefined, slug).then(res => setProjects(res));
+      getProjectsAction('team', undefined, slug, teamOpts).then(res => setProjects(res));
     }
   }, [pathname, resolveTeamSlugForRefresh]);
 
@@ -400,18 +510,18 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     const row = rows.find(r => r.id === rowId);
     if (!row) return;
     const updated = { ...row, [key]: value } as SheetRow & { project_id: string };
-    await upsertSheetRowAction(tabId, updated);
+    const saved = await upsertSheetRowAction(tabId, { ...updated, project_id: projectId });
     setSheetData(prev => ({
       ...prev,
-      [projectId]: { ...prev[projectId], [tabId]: prev[projectId][tabId].map(r => r.id === rowId ? updated : r) }
+      [projectId]: { ...prev[projectId], [tabId]: prev[projectId][tabId].map(r => r.id === rowId ? saved : r) }
     }));
   }, [sheetData]);
 
   const updateSheetRowData = useCallback(async (projectId: string, tabId: string, updatedRow: SheetRow) => {
-    await upsertSheetRowAction(tabId, { ...updatedRow, project_id: projectId });
+    const saved = await upsertSheetRowAction(tabId, { ...updatedRow, project_id: projectId });
     setSheetData(prev => ({
       ...prev,
-      [projectId]: { ...prev[projectId], [tabId]: (prev[projectId]?.[tabId] ?? []).map(r => r.id === updatedRow.id ? updatedRow : r) }
+      [projectId]: { ...prev[projectId], [tabId]: (prev[projectId]?.[tabId] ?? []).map(r => r.id === saved.id ? saved : r) }
     }));
   }, []);
 
@@ -436,7 +546,14 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     if (!loggedInUser) return [];
     if (workspaceScope === 'team') {
       const teamProjects = projects.filter(p => p.workspace_type === 'team');
-      const pathSlug = pathname.split('/').filter(Boolean)[0];
+      const segments = pathname.split('/').filter(Boolean);
+      const pathSlug = segments[0];
+      const roleFromPath = segments[1];
+      const urlWorkspaceRole =
+        roleFromPath === 'admin' || roleFromPath === 'pm' || roleFromPath === 'dev' || roleFromPath === 'client'
+          ? roleFromPath
+          : undefined;
+
       const isCompanyAdminForUrlTeam =
         !!pathSlug &&
         teamMemberships.some(
@@ -445,7 +562,29 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
             m.role === 'admin' &&
             m.profile_id === loggedInUser.id
         );
-      if (loggedInUser.role === 'admin' || isCompanyAdminForUrlTeam) return teamProjects;
+
+      const effectiveWorkspaceRole =
+        urlWorkspaceRole ||
+        (loggedInUser.activeWorkspaceRole as string | undefined) ||
+        loggedInUser.role ||
+        'pm';
+
+      const actingAsTeamAdmin =
+        (loggedInUser.role === 'admin' && effectiveWorkspaceRole === 'admin') ||
+        (isCompanyAdminForUrlTeam && effectiveWorkspaceRole === 'admin');
+
+      if (actingAsTeamAdmin) return teamProjects;
+
+      if (effectiveWorkspaceRole === 'pm') {
+        return teamProjects.filter(p => userSeesProjectAsPm(loggedInUser.id, p));
+      }
+      if (effectiveWorkspaceRole === 'dev') {
+        return teamProjects.filter(p => userSeesProjectAsDev(loggedInUser.id, p));
+      }
+      if (effectiveWorkspaceRole === 'client') {
+        return teamProjects.filter(p => userSeesProjectAsClient(loggedInUser.id, p));
+      }
+
       return teamProjects.filter(p => userSeesProjectAsTeamMember(loggedInUser.id, p));
     }
     return projects.filter(p => p.workspace_type === 'personal');
@@ -493,8 +632,6 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     sheetLoadingProjects,
     language,
     setLanguage,
-    sidebarCollapsed,
-    setSidebarCollapsed,
     handleLogout,
     handleUpdateProject,
     handleAssignMember,

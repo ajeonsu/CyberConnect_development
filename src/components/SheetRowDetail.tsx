@@ -1,6 +1,7 @@
-import type { SheetTab, SheetRow } from '@/types';
+import type { SheetTab, SheetRow, Project } from '@/types';
 import {
-  getAssignableTeamProfiles,
+  getProjectDevelopers,
+  getTaskAssigneeProfileIdForProject,
   translate,
   getLocalizedCell,
   getLocalizedColumnLabel,
@@ -16,6 +17,7 @@ import { useState, useEffect } from 'react';
 interface Props {
   tab: SheetTab;
   row: SheetRow;
+  project: Project | null;
   projectSheetRole: ProjectSheetRole;
   language: Language;
   onClose: () => void;
@@ -28,6 +30,7 @@ const readOnlyControlClass =
 export function SheetRowDetail({
   tab,
   row,
+  project,
   projectSheetRole,
   language,
   onClose,
@@ -36,8 +39,14 @@ export function SheetRowDetail({
   const [formData, setFormData] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
-    setFormData(row);
-  }, [row]);
+    const next: Record<string, unknown> = { ...row };
+    if (isTasksTab(tab.id)) {
+      const aid = getTaskAssigneeProfileIdForProject(row, project);
+      next.assignee = aid ?? '';
+      next.assignee_id = aid ?? null;
+    }
+    setFormData(next);
+  }, [row, tab.id, project?.id, project?.workspace_type, (project?.assignedDevIds ?? []).join(',')]);
 
   const devNonTaskLock = projectSheetRole === 'dev' && !isTasksTab(tab.id);
   const clientRemarkKeys = getClientRemarkColumnKeys(tab.id);
@@ -55,6 +64,8 @@ export function SheetRowDetail({
     if (projectSheetRole === 'pm') return true;
     if (projectSheetRole === 'dev' && isTasksTab(tab.id)) {
       const c = tab.columns.find(c => c.key === colKey);
+      // Assignee is read-only for developers
+      if (c?.type === 'assignee') return false;
       return c?.editable ?? false;
     }
     return false;
@@ -133,7 +144,7 @@ export function SheetRowDetail({
                     className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40"
                   >
                     <option value="">{translate('Unassigned', language)}</option>
-                    {getAssignableTeamProfiles().map(m => (
+                    {getProjectDevelopers(project).map(m => (
                       <option key={m.id} value={m.id}>
                         {m.name}
                       </option>

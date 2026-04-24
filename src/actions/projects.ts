@@ -39,7 +39,17 @@ export async function getTeamIdBySlugAction(slug: string): Promise<string | null
   return getTeamIdBySlug(supabase, slug)
 }
 
-export async function getProjectsAction(workspaceType?: 'personal' | 'team', teamId?: string, teamSlug?: string): Promise<Project[]> {
+export type GetProjectsOptions = {
+  /** Every team project for this team (executive /admin/dashboard), ignoring active workspace role filters. */
+  bypassProjectRoleFilter?: boolean;
+};
+
+export async function getProjectsAction(
+  workspaceType?: 'personal' | 'team',
+  teamId?: string,
+  teamSlug?: string,
+  options?: GetProjectsOptions
+): Promise<Project[]> {
   const session = await getSession()
   if (!session) return []
   
@@ -73,9 +83,10 @@ export async function getProjectsAction(workspaceType?: 'personal' | 'team', tea
     query = query.eq('workspace_type', 'team')
       .eq('team_id', targetTeamId);
 
-    // Platform admin OR company admin on this team sees every team project (e.g. executive dashboard).
-    // Otherwise active_workspace_role is often pm/dev while assigning others, which wrongly hid projects.
-    let skipMemberFilter = activeRole === 'admin' || session.role === 'admin';
+    // Full team list: explicit bypass (admin dashboard) OR acting as admin workspace role.
+    // Do not use session.role (platform admin) alone — when admin switches to pm/dev/client they must
+    // see only projects they hold that assignment on.
+    let skipMemberFilter = options?.bypassProjectRoleFilter === true || activeRole === 'admin';
     if (!skipMemberFilter) {
       const { data: teamRow } = await supabase
         .from('team_members')
@@ -83,7 +94,7 @@ export async function getProjectsAction(workspaceType?: 'personal' | 'team', tea
         .eq('team_id', targetTeamId)
         .eq('profile_id', profile.id)
         .maybeSingle();
-      skipMemberFilter = teamRow?.role === 'admin';
+      skipMemberFilter = teamRow?.role === 'admin' && activeRole === 'admin';
     }
 
     if (!skipMemberFilter) {

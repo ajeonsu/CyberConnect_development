@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import type { SheetTab, SheetRow } from '@/types';
+import type { SheetTab, SheetRow, Project } from '@/types';
 import {
-  getAssignableTeamProfiles,
+  getProjectDevelopers,
+  getTaskAssigneeProfileIdForProject,
+  getUserName,
   translate,
   getLocalizedCell,
   getLocalizedColumnLabel,
@@ -15,6 +17,7 @@ import { ChevronUp, ChevronDown, Trash2, Plus } from 'lucide-react';
 interface Props {
   tab: SheetTab;
   rows: SheetRow[];
+  project: Project | null;
   /** Role on this project for sheet write rules (pm / dev / client). */
   projectSheetRole: ProjectSheetRole;
   language: Language;
@@ -44,6 +47,7 @@ const statusColors: Record<string, { text: string; bg: string }> = {
 export function GenericSheet({
   tab,
   rows,
+  project,
   projectSheetRole,
   language,
   onSelectRow,
@@ -90,6 +94,8 @@ export function GenericSheet({
       if (pm) return true;
       if (projectSheetRole === 'dev') {
         const c = tab.columns.find(c => c.key === colKey);
+        // User hint: "assigning developer cell is not accessible to dev only pm and the admin"
+        if (c?.type === 'assignee') return false; 
         return c?.editable ?? false;
       }
       return false;
@@ -174,9 +180,19 @@ export function GenericSheet({
                   {idx + 1}
                 </td>
                 {displayColumns.map(c => {
-                  const value = String(row[c.actualKey] ?? '');
                   const sourceCol = tab.columns.find(col => col.key === c.sourceKey) ?? c;
-                  const displayValue = c.langTag ? value : getLocalizedCell(row, c.actualKey, language);
+                  const isTasksAssignee = tasks && sourceCol.type === 'assignee';
+                  const assigneeEffectiveId = isTasksAssignee
+                    ? getTaskAssigneeProfileIdForProject(row, project)
+                    : null;
+                  const value = isTasksAssignee
+                    ? (assigneeEffectiveId ?? '')
+                    : String(row[c.actualKey] ?? '');
+                  const displayValue = c.langTag
+                    ? value
+                    : isTasksAssignee
+                      ? (assigneeEffectiveId ? getUserName(assigneeEffectiveId) : '')
+                      : getLocalizedCell(row, c.actualKey, language);
                   const isEditing = editingCell?.id === row.id && editingCell?.key === c.actualKey;
                   const editable = canEditCell(c.sourceKey);
                   const isGuestEditable =
@@ -202,7 +218,7 @@ export function GenericSheet({
                             onClick={e => e.stopPropagation()}
                           >
                             <option value="">{translate('Unassigned', language)}</option>
-                            {getAssignableTeamProfiles().map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                            {getProjectDevelopers(project).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                           </select>
                         ) : sourceCol.type === 'status' || sourceCol.type === 'select' ? (
                           <select

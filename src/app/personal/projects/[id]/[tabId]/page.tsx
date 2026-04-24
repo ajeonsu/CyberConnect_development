@@ -63,6 +63,11 @@ export default function PersonalProjectTabPage() {
     return sheetData[projectId]?.[tabId] ?? [];
   }, [sheetData, projectId, tabId]);
 
+  const selectedRowSynced = useMemo(() => {
+    if (!selectedRow) return null;
+    return currentRows.find(r => r.id === selectedRow.id) ?? selectedRow;
+  }, [selectedRow, currentRows]);
+
   const isSheetLoading = !sheetData[projectId] || sheetLoadingProjects[projectId];
 
   if (isFetchingProject) {
@@ -99,6 +104,7 @@ export default function PersonalProjectTabPage() {
           <GenericSheet
             tab={activeTab}
             rows={currentRows}
+            project={activeProject}
             projectSheetRole={projectSheetRole}
             language={language}
             onSelectRow={(row) => {
@@ -115,10 +121,11 @@ export default function PersonalProjectTabPage() {
           />
         </div>
 
-        {selectedRow && (
+        {selectedRowSynced && (
           <SheetRowDetail
             tab={activeTab}
-            row={selectedRow}
+            row={selectedRowSynced}
+            project={activeProject}
             projectSheetRole={projectSheetRole}
             language={language}
             onClose={() => setSelectedRow(null)}
@@ -133,6 +140,8 @@ export default function PersonalProjectTabPage() {
           <AddRowDrawer
             tab={activeTab}
             projectId={projectId}
+            project={activeProject}
+            projectSheetRole={projectSheetRole}
             language={language}
             onClose={() => setShowAddRow(false)}
             onSave={async (newRow) => {

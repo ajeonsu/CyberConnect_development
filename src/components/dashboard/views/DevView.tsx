@@ -1,6 +1,6 @@
-import type { Project, SheetRow } from '@/types';
+import type { Project, SheetRow, UserProfile } from '@/types';
 import { Code, CheckCircle, Clock, AlertTriangle, FileCode } from 'lucide-react';
-import { getLocalizedProjectName, translate, type Language } from '@/lib/data';
+import { getLocalizedProjectName, getTaskAssigneeProfileIdForProject, translate, type Language } from '@/lib/data';
 import { DashboardLanguageToggle } from '@/components/dashboard/DashboardLanguageToggle';
 
 interface Props {
@@ -9,6 +9,7 @@ interface Props {
   onSelectProject: (projectId: string) => void;
   language: Language;
   onLanguageChange: (lang: Language) => void;
+  user: UserProfile;
 }
 
 function moreTechLabel(n: number, language: Language) {
@@ -16,7 +17,7 @@ function moreTechLabel(n: number, language: Language) {
   return `+${n} more`;
 }
 
-export function DevView({ projects, sheetData, onSelectProject, language, onLanguageChange }: Props) {
+export function DevView({ projects, sheetData, onSelectProject, language, onLanguageChange, user }: Props) {
   if (projects.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center p-8 bg-surface-950/20">
@@ -33,16 +34,19 @@ export function DevView({ projects, sheetData, onSelectProject, language, onLang
     );
   }
 
-  const allAssignedTasks = projects.flatMap(p => {
-    const tasks = sheetData[p.id]?.['tasks'] || [];
-    return tasks.map(t => ({ ...t, projectName: p.name, projectId: p.id }));
+  const myAssignedTasks: any[] = projects.flatMap(p => {
+    const tasks = (sheetData[p.id]?.['tasks'] || []) as SheetRow[];
+    // Filter tasks assigned to the current user
+    return tasks
+      .filter(t => getTaskAssigneeProfileIdForProject(t, p) === user.id)
+      .map(t => ({ ...t, projectName: p.name, projectId: p.id }));
   });
 
   const stats = {
-    total: allAssignedTasks.length,
-    done: allAssignedTasks.filter(t => (t as any).status === 'Done').length,
-    inProgress: allAssignedTasks.filter(t => (t as any).status === 'In progress').length,
-    blocked: allAssignedTasks.filter(t => (t as any).status === 'Blocked').length,
+    total: myAssignedTasks.length,
+    done: myAssignedTasks.filter(t => t.status === 'Done' || t.status === '完了').length,
+    inProgress: myAssignedTasks.filter(t => t.status === 'In progress' || t.status === '進行中').length,
+    blocked: myAssignedTasks.filter(t => t.status === 'Blocked' || t.status === 'ブロック').length,
   };
 
   return (
