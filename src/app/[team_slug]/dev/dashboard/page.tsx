@@ -13,7 +13,9 @@ export default function DevDashboardPage() {
   const { 
     visibleProjects, 
     sheetData, 
-    isLoading 
+    isLoading,
+    language,
+    setLanguage,
   } = useWorkspace();
 
   const handleSelectProject = useCallback((projectId: string) => {
@@ -27,7 +29,8 @@ export default function DevDashboardPage() {
       projects={visibleProjects}
       sheetData={sheetData}
       onSelectProject={handleSelectProject}
-      language="en"
+      language={language}
+      onLanguageChange={setLanguage}
     />
   );
 }

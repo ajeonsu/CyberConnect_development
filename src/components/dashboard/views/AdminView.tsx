@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { Project, SheetRow, UserProfile } from '@/types';
 import { FolderOpen, CheckCircle, Clock, Pause, Users, ListChecks, AlertTriangle, Plus, X, ChevronDown, BarChart3, Sparkles, Loader, Info } from 'lucide-react';
-import { getUserName, getProfilesByRole } from '@/lib/data';
+import { getUserName, getProfilesByRole, translate, type Language } from '@/lib/data';
 import { useWorkspace } from '@/components/WorkspaceProvider';
+import { DashboardLanguageToggle } from '@/components/dashboard/DashboardLanguageToggle';
 import type { GlobalTaskStats } from '@/lib/dal/stats';
 
 import { NewProjectModal } from '@/components/NewProjectModal';
@@ -30,7 +31,7 @@ const PROJECT_COLORS = [
 ];
 
 export function AdminView({ projects, getSheetData, onSelectProject, onUpdateProject, onAssignMember, onRemoveMember, onAddProject, onDeleteProject, serverStats }: Props) {
-  const { loggedInUser, teamPool } = useWorkspace();
+  const { loggedInUser, teamPool, language, setLanguage } = useWorkspace();
   const [showNewProject, setShowNewProject] = useState(false);
   const [editingPm, setEditingPm] = useState<string | null>(null);
   const [editingDevs, setEditingDevs] = useState<string | null>(null);
@@ -99,45 +100,48 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
   return (
     <div className="flex-1 overflow-auto p-10 bg-surface-950/20">
       <div className="max-w-7xl mx-auto animate-fade-in">
-        <div className="flex items-center justify-between mb-10">
+        <div className="flex items-center justify-between mb-10 gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">Executive Dashboard</h1>
+            <h1 className="text-3xl font-bold text-white tracking-tight">{translate('Executive Dashboard', language)}</h1>
             <div className="flex items-center gap-4 mt-2">
               <p className="text-gray-500 flex items-center gap-2 text-sm">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Global monitor
+                {translate('Global monitor', language)}
               </p>
               <div className="h-4 w-px bg-surface-800" />
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-surface-900 border border-surface-800">
                 <Users className="w-3.5 h-3.5 text-brand-400" />
                 <span className={`text-[11px] font-bold ${remainingSeats <= 2 ? 'text-rose-400' : 'text-gray-300'}`}>
-                  Staff Seats: {occupiedSeats}/20
+                  {translate('Staff Seats', language)}: {occupiedSeats}/20
                 </span>
                 {remainingSeats <= 2 && (
-                  <span className="text-[10px] text-rose-500 font-medium animate-pulse">(Near Limit)</span>
+                  <span className="text-[10px] text-rose-500 font-medium animate-pulse">({translate('Near Limit', language)})</span>
                 )}
               </div>
             </div>
           </div>
-          <button
-            onClick={() => setShowNewProject(true)}
-            className="flex items-center gap-2 px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-brand-600/20 active:scale-95"
-          >
-            <Plus className="w-4 h-4" />
-            New Project
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <DashboardLanguageToggle language={language} onLanguageChange={setLanguage} />
+            <button
+              onClick={() => setShowNewProject(true)}
+              className="flex items-center gap-2 px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-brand-600/20 active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              {translate('New Project', language)}
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-12">
           <div className="lg:col-span-3 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard icon={FolderOpen} label="Total Projects" labelJa="プロジェクト総数" value={totalProjects} color="text-brand-400" />
-            <StatCard icon={CheckCircle} label="Active" labelJa="アクティブ" value={activeProjects} color="text-emerald-400" />
-            <StatCard icon={ListChecks} label="Tasks Completed" labelJa="完了タスク" value={completedTasks} total={totalTasks} color="text-brand-400" />
-            <StatCard icon={AlertTriangle} label="Blocked Items" labelJa="ブロック中" value={blockedTasks} color={blockedTasks > 0 ? 'text-rose-400' : 'text-gray-600'} />
+            <StatCard icon={FolderOpen} label="Total Projects" labelJa="プロジェクト総数" value={totalProjects} color="text-brand-400" language={language} />
+            <StatCard icon={CheckCircle} label="Active" labelJa="アクティブ" value={activeProjects} color="text-emerald-400" language={language} />
+            <StatCard icon={ListChecks} label="Tasks Completed" labelJa="完了タスク" value={completedTasks} total={totalTasks} color="text-brand-400" language={language} />
+            <StatCard icon={AlertTriangle} label="Blocked Items" labelJa="ブロック中" value={blockedTasks} color={blockedTasks > 0 ? 'text-rose-400' : 'text-gray-600'} language={language} />
           </div>
           <div className="bg-surface-900/60 backdrop-blur-sm border border-surface-800/60 rounded-2xl p-6 flex flex-col justify-center">
             <div className="flex items-center justify-between mb-4">
-              <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Global Progress</span>
+              <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">{translate('Global Progress', language)}</span>
               <span className="text-lg font-bold text-white">{totalProgress}%</span>
             </div>
             <div className="relative h-20 flex items-center justify-center">
@@ -156,35 +160,35 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
           <div className="xl:col-span-2 bg-surface-900/40 border border-surface-800/60 rounded-2xl p-8">
             <h3 className="text-white font-bold mb-8 flex items-center gap-2">
               <BarChart3 className="w-5 h-5 text-brand-400" />
-              Global Task Distribution
+              {translate('Global Task Distribution', language)}
             </h3>
             <div className="flex flex-col gap-6">
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400 flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-brand-500" />
-                    Completed
+                    {translate('Completed', language)}
                   </span>
                   <span className="text-white font-medium">{completedTasks}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400 flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-amber-500" />
-                    In Progress
+                    {translate('In progress', language)}
                   </span>
                   <span className="text-white font-medium">{inProgressTasks}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400 flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-rose-500" />
-                    Blocked
+                    {translate('Blocked', language)}
                   </span>
                   <span className="text-white font-medium">{blockedTasks}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400 flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-surface-700" />
-                    Not Started
+                    {translate('Not Started', language)}
                   </span>
                   <span className="text-white font-medium">{notStartedTasks}</span>
                 </div>
@@ -203,7 +207,7 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
             <div className="w-16 h-16 rounded-2xl bg-brand-500/20 flex items-center justify-center mb-4">
               <Sparkles className="w-8 h-8 text-brand-400" />
             </div>
-            <h3 className="text-white font-bold mb-2">Platform Status</h3>
+            <h3 className="text-white font-bold mb-2">{translate('Platform Status', language)}</h3>
             <p className="text-gray-400 text-sm mb-6 leading-relaxed">
               All project systems are running optimally. Total data synced across projects.
             </p>
@@ -228,7 +232,7 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
               </div>
               <div>
                 <h2 className="text-xl font-bold text-white">{pmName || 'Unassigned'}</h2>
-                <p className="text-xs text-gray-500 uppercase tracking-widest font-bold">{pmProjects.length} Managed Projects</p>
+                <p className="text-xs text-gray-500 uppercase tracking-widest font-bold">{pmProjects.length} {translate('Managed Projects', language)}</p>
               </div>
               <div className="ml-auto h-px bg-surface-800 flex-1 ml-6 opacity-30" />
             </div>
@@ -263,7 +267,7 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
 
                       <div className="mb-5">
                         <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider mb-2">
-                          <span className="text-gray-500">Progress</span>
+                          <span className="text-gray-500">{translate('Progress', language)}</span>
                           <span className="text-white">{progress}%</span>
                         </div>
                         <div className="w-full h-1.5 bg-surface-800 rounded-full overflow-hidden">
@@ -273,15 +277,15 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
 
                       <div className="grid grid-cols-3 gap-2 text-center mb-6">
                         <div className="bg-surface-950/20 p-2 rounded-lg border border-surface-800/40">
-                          <div className="text-[9px] text-gray-500 uppercase font-bold">Done</div>
+                          <div className="text-[9px] text-gray-500 uppercase font-bold">{translate('Done', language)}</div>
                           <div className="text-white font-bold text-xs">{stats.done}</div>
                         </div>
                         <div className="bg-surface-950/20 p-2 rounded-lg border border-surface-800/40">
-                          <div className="text-[9px] text-gray-500 uppercase font-bold">In Dev</div>
+                          <div className="text-[9px] text-gray-500 uppercase font-bold">{translate('In Dev', language)}</div>
                           <div className="text-amber-400 font-bold text-xs">{stats.inProgress}</div>
                         </div>
                         <div className="bg-surface-950/20 p-2 rounded-lg border border-surface-800/40">
-                          <div className="text-[9px] text-gray-500 uppercase font-bold">Block</div>
+                          <div className="text-[9px] text-gray-500 uppercase font-bold">{translate('Block', language)}</div>
                           <div className="text-rose-400 font-bold text-xs">{stats.blocked}</div>
                         </div>
                       </div>
@@ -289,7 +293,7 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                       <div className="pt-4 border-t border-surface-800/60 space-y-4">
                         {/* PM Dropdown Section */}
                         <div className="flex items-center justify-between group/pm">
-                          <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">PM</span>
+                          <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{translate('PM', language)}</span>
                           {editingPm === project.id ? (
                             <div className="flex-1 flex justify-end ml-4">
                               <select
@@ -345,7 +349,7 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                         {/* Developers Section (Always Rendered) */}
                         <div className="space-y-2">
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">Developers</span>
+                            <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{translate('Developers', language)}</span>
                             {!editingDevs || editingDevs !== project.id ? (
                               <button onClick={() => setEditingDevs(project.id)} className="text-[11px] text-gray-400 font-medium hover:text-brand-300 transition-colors flex items-center gap-1">
                                 {(project.assignedDevIds || []).length > 0 ? `${(project.assignedDevIds || []).length} Assigned` : 'Assign'}
@@ -405,9 +409,9 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                         </div>
 
                         <div className="flex items-center justify-end gap-2 pt-2">
-                          <button onClick={() => setInviteFor({ projectId: project.id, role: 'pm' })} className="text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:text-white transition-colors">Invite</button>
+                          <button onClick={() => setInviteFor({ projectId: project.id, role: 'pm' })} className="text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:text-white transition-colors">{translate('Invite', language)}</button>
                           <div className="w-1 h-1 rounded-full bg-surface-700" />
-                          <button onClick={() => setShowDeleteConfirmFor(project.id)} className="text-[9px] font-bold uppercase tracking-widest text-rose-500/80 hover:text-rose-400 transition-colors">Delete</button>
+                          <button onClick={() => setShowDeleteConfirmFor(project.id)} className="text-[9px] font-bold uppercase tracking-widest text-rose-500/80 hover:text-rose-400 transition-colors">{translate('Delete', language)}</button>
                         </div>
                       </div>
                     </div>
@@ -455,22 +459,25 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
   );
 }
 
-function StatCard({ icon: Icon, label, labelJa, value, total, color }: {
+function StatCard({ icon: Icon, label, labelJa, value, total, color, language }: {
   icon: typeof FolderOpen; label: string; labelJa: string; value: string | number; total?: number; color: string;
+  language: Language;
 }) {
+  const primary = language === 'ja' ? labelJa : label;
+  const secondary = language === 'ja' ? label : labelJa;
   return (
     <div className="bg-surface-900/60 backdrop-blur-sm border border-surface-800/60 rounded-2xl p-6 shadow-sm">
       <div className="flex items-center justify-between mb-4">
         <div className={`p-2 rounded-xl bg-surface-950/40 border border-surface-800/60 ${color}`}>
           <Icon className="w-5 h-5" />
         </div>
-        <div className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{labelJa}</div>
+        <div className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{secondary}</div>
       </div>
       <div className="flex items-end gap-2">
         <p className={`text-3xl font-bold text-white`}>{value}</p>
         {total !== undefined && <p className="text-gray-600 text-sm mb-1">/ {total}</p>}
       </div>
-      <p className="text-xs text-gray-500 mt-1 font-medium">{label}</p>
+      <p className="text-xs text-gray-500 mt-1 font-medium">{primary}</p>
     </div>
   );
 }

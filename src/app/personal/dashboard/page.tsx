@@ -14,7 +14,9 @@ export default function PersonalDashboardPage() {
     sheetData, 
     handleAddProject,
     handleDeleteProject,
-    isLoading 
+    isLoading,
+    language,
+    setLanguage,
   } = useWorkspace();
 
   useEffect(() => {
@@ -45,6 +47,8 @@ export default function PersonalDashboardPage() {
       onAddProject={handleAddProject}
       onDeleteProject={handleDeleteProject}
       showPurchaseButton={!isOwner}
+      language={language}
+      onLanguageChange={setLanguage}
     />
   );
 }

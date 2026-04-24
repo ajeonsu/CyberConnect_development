@@ -1,16 +1,22 @@
-import { useState } from 'react';
 import type { Project, SheetRow } from '@/types';
 import { Code, CheckCircle, Clock, AlertTriangle, FileCode } from 'lucide-react';
-import { getLocalizedCell, type Language } from '@/lib/data';
+import { getLocalizedProjectName, translate, type Language } from '@/lib/data';
+import { DashboardLanguageToggle } from '@/components/dashboard/DashboardLanguageToggle';
 
 interface Props {
   projects: Project[];
   sheetData: Record<string, Record<string, SheetRow[]>>;
   onSelectProject: (projectId: string) => void;
   language: Language;
+  onLanguageChange: (lang: Language) => void;
 }
 
-export function DevView({ projects, sheetData, onSelectProject, language }: Props) {
+function moreTechLabel(n: number, language: Language) {
+  if (language === 'ja') return `他${n}件`;
+  return `+${n} more`;
+}
+
+export function DevView({ projects, sheetData, onSelectProject, language, onLanguageChange }: Props) {
   if (projects.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center p-8 bg-surface-950/20">
@@ -18,9 +24,9 @@ export function DevView({ projects, sheetData, onSelectProject, language }: Prop
           <div className="w-20 h-20 bg-surface-900 rounded-3xl border border-surface-800 flex items-center justify-center mx-auto mb-6 shadow-xl">
             <Code className="w-10 h-10 text-gray-700" />
           </div>
-          <h2 className="text-2xl font-bold text-white mb-2">No developer assignments</h2>
+          <h2 className="text-2xl font-bold text-white mb-2">{translate('No developer assignments', language)}</h2>
           <p className="text-gray-500 max-w-sm mx-auto">
-            You are not currently assigned to any team projects as a Developer.
+            {translate('You are not currently assigned to any team projects as a Developer.', language)}
           </p>
         </div>
       </div>
@@ -42,22 +48,25 @@ export function DevView({ projects, sheetData, onSelectProject, language }: Prop
   return (
     <div className="flex-1 overflow-auto p-10 bg-surface-950/20">
       <div className="max-w-6xl mx-auto animate-fade-in">
-        <div className="mb-10">
-          <h1 className="text-3xl font-bold text-white tracking-tight">Developer Portal</h1>
-          <p className="text-gray-500 mt-1.5 flex items-center gap-2 text-sm">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Engineering — Task oversight and assigned system components
-          </p>
+        <div className="mb-10 flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-3xl font-bold text-white tracking-tight">{translate('Developer Portal', language)}</h1>
+            <p className="text-gray-500 mt-1.5 flex items-center gap-2 text-sm">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              {translate('Engineering — Task oversight and assigned system components', language)}
+            </p>
+          </div>
+          <DashboardLanguageToggle language={language} onLanguageChange={onLanguageChange} />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-10">
-          <StatMini label="Assigned Tasks" value={stats.total} icon={FileCode} color="text-brand-400" />
-          <StatMini label="In Progress" value={stats.inProgress} icon={Clock} color="text-amber-400" />
-          <StatMini label="Completed" value={stats.done} icon={CheckCircle} color="text-emerald-400" />
-          <StatMini label="Blocked" value={stats.blocked} icon={AlertTriangle} color="text-rose-400" />
+          <StatMini label="Assigned Tasks" value={stats.total} icon={FileCode} color="text-brand-400" language={language} />
+          <StatMini label="In Progress" value={stats.inProgress} icon={Clock} color="text-amber-400" language={language} />
+          <StatMini label="Completed" value={stats.done} icon={CheckCircle} color="text-emerald-400" language={language} />
+          <StatMini label="Blocked" value={stats.blocked} icon={AlertTriangle} color="text-rose-400" language={language} />
         </div>
 
-        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-widest mb-6">Assigned Projects</h2>
+        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-widest mb-6">{translate('Assigned Projects', language)}</h2>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">
           {projects.map(project => (
             <div key={project.id} onClick={() => onSelectProject(project.id)} className="group relative cursor-pointer">
@@ -67,14 +76,14 @@ export function DevView({ projects, sheetData, onSelectProject, language }: Prop
                     <Code className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-white font-bold group-hover:text-brand-300 transition-colors leading-tight">{project.name}</h3>
+                    <h3 className="text-white font-bold group-hover:text-brand-300 transition-colors leading-tight">{getLocalizedProjectName(project, language)}</h3>
                     <p className="text-gray-500 text-xs font-medium mt-0.5">{project.client}</p>
                   </div>
                 </div>
                 
                 <div className="space-y-4">
                   <div>
-                    <div className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-2">Primary Tech Stack</div>
+                    <div className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-2">{translate('Primary Tech Stack', language)}</div>
                     <div className="flex flex-wrap gap-2">
                       {(sheetData[project.id]?.['tech_stack'] || []).slice(0, 4).map((tech, idx) => (
                         <span key={idx} className="text-[10px] px-2 py-1 rounded bg-surface-800 border border-surface-700 text-gray-400">
@@ -82,10 +91,10 @@ export function DevView({ projects, sheetData, onSelectProject, language }: Prop
                         </span>
                       ))}
                       {(sheetData[project.id]?.['tech_stack'] || []).length > 4 && (
-                        <span className="text-[10px] text-gray-600">+{(sheetData[project.id]?.['tech_stack'] || []).length - 4} more</span>
+                        <span className="text-[10px] text-gray-600">{moreTechLabel((sheetData[project.id]?.['tech_stack'] || []).length - 4, language)}</span>
                       )}
                       {(sheetData[project.id]?.['tech_stack'] || []).length === 0 && (
-                        <span className="text-[10px] text-gray-600 italic">No stack defined yet</span>
+                        <span className="text-[10px] text-gray-600 italic">{translate('No stack defined yet', language)}</span>
                       )}
                     </div>
                   </div>
@@ -100,14 +109,14 @@ export function DevView({ projects, sheetData, onSelectProject, language }: Prop
   );
 }
 
-function StatMini({ label, value, icon: Icon, color }: { label: string; value: number; icon: any; color: string }) {
+function StatMini({ label, value, icon: Icon, color, language }: { label: string; value: number; icon: typeof FileCode; color: string; language: Language }) {
   return (
     <div className="bg-surface-900/60 border border-surface-800/60 rounded-2xl p-5 flex items-center gap-4">
       <div className={`p-2.5 rounded-xl bg-surface-950/40 border border-surface-800/60 ${color}`}>
         <Icon className="w-5 h-5" />
       </div>
       <div>
-        <div className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{label}</div>
+        <div className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{translate(label, language)}</div>
         <div className="text-xl font-bold text-white leading-tight mt-0.5">{value}</div>
       </div>
     </div>

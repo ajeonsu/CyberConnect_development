@@ -10,7 +10,7 @@ export default function ClientDashboardPage() {
   const params = useParams();
   const teamSlug = params.team_slug as string;
 
-  const { visibleProjects, sheetData, isLoading } = useWorkspace();
+  const { visibleProjects, sheetData, isLoading, language, setLanguage } = useWorkspace();
 
   const handleSelectProject = useCallback(
     (projectId: string) => {
@@ -40,6 +40,8 @@ export default function ClientDashboardPage() {
       getTaskStats={getTaskStats}
       sheetData={sheetData}
       onSelectProject={handleSelectProject}
+      language={language}
+      onLanguageChange={setLanguage}
     />
   );
 }

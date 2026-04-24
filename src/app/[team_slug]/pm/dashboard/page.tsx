@@ -13,7 +13,9 @@ export default function PMDashboardPage() {
   const { 
     visibleProjects, 
     sheetData, 
-    isLoading 
+    isLoading,
+    language,
+    setLanguage,
   } = useWorkspace();
 
   const handleSelectProject = useCallback((projectId: string) => {
@@ -37,6 +39,8 @@ export default function PMDashboardPage() {
       projects={visibleProjects}
       getTaskStats={getTaskStats}
       onSelectProject={handleSelectProject}
+      language={language}
+      onLanguageChange={setLanguage}
     />
   );
 }

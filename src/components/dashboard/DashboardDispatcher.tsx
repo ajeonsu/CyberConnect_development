@@ -8,7 +8,6 @@ import { DevView } from './views/DevView';
 import { ClientView } from './views/ClientView';
 import { PersonalView } from './views/PersonalView';
 import { useRouter } from 'next/navigation';
-import type { Language } from '@/lib/data';
 import type { GlobalTaskStats } from '@/lib/dal/stats';
 
 interface Props {
@@ -28,7 +27,9 @@ export default function DashboardDispatcher({ activeRole, serverStats }: Props) 
     handleAddProject, 
     handleDeleteProject, 
     loggedInUser,
-    workspaceScope
+    workspaceScope,
+    language,
+    setLanguage,
   } = useWorkspace();
 
   const handleSelectProject = useCallback((projectId: string) => {
@@ -74,6 +75,8 @@ export default function DashboardDispatcher({ activeRole, serverStats }: Props) 
           projects={visibleProjects}
           getTaskStats={getTaskStats}
           onSelectProject={handleSelectProject}
+          language={language}
+          onLanguageChange={setLanguage}
         />
       );
     case 'developer':
@@ -82,7 +85,8 @@ export default function DashboardDispatcher({ activeRole, serverStats }: Props) 
           projects={visibleProjects}
           sheetData={sheetData}
           onSelectProject={handleSelectProject}
-          language="en" // Defaulting to en for now
+          language={language}
+          onLanguageChange={setLanguage}
         />
       );
     case 'client':
@@ -92,6 +96,8 @@ export default function DashboardDispatcher({ activeRole, serverStats }: Props) 
           getTaskStats={getTaskStats}
           sheetData={sheetData}
           onSelectProject={handleSelectProject}
+          language={language}
+          onLanguageChange={setLanguage}
         />
       );
     case 'personal':
@@ -101,6 +107,8 @@ export default function DashboardDispatcher({ activeRole, serverStats }: Props) 
           getTaskStats={getTaskStats}
           onSelectProject={handleSelectProject}
           onAddProject={handleAddProject}
+          language={language}
+          onLanguageChange={setLanguage}
         />
       );
     default:
