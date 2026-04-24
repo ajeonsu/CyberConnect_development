@@ -87,6 +87,7 @@ export default function DashboardDispatcher({ activeRole, serverStats }: Props) 
           onSelectProject={handleSelectProject}
           language={language}
           onLanguageChange={setLanguage}
+          user={loggedInUser}
         />
       );
     case 'client':

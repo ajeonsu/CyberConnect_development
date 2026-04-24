@@ -19,8 +19,6 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
     setWorkspaceScope, 
     isLoading, 
     projects, 
-    sidebarCollapsed, 
-    setSidebarCollapsed, 
     handleLogout,
     updateMyProfile,
     updateCurrentTeam,
@@ -65,8 +63,6 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
         user={loggedInUser}
         activeTabId={activeTabId || (pathname.includes('/dashboard') ? 'dashboard' : '')}
         visibleTabs={sheetTabs.filter(t => t.visibleTo.includes('pm'))}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         onTabChange={(id) => router.push(`/personal/projects/${activeProjectId}/${id}`)}
         workspaceScope="personal"
         teamMemberships={teamMemberships}

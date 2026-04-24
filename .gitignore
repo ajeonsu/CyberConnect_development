@@ -6,6 +6,7 @@ build/
 !.env.example
 .DS_Store
 *.log
+*.tsbuildinfo
 Untitled
 images/fuck.jpg
 images/ugh.jpg

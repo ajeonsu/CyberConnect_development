@@ -1,25 +1,29 @@
 import { useMemo, useState } from 'react';
-import type { SheetTab, SheetRow } from '@/types';
+import type { SheetTab, SheetRow, Project } from '@/types';
 import { X, Save } from 'lucide-react';
 import {
-  getAssignableTeamProfiles,
+  getProjectDevelopers,
   generateCode,
   getBilingualRowFieldKey,
   getLocalizedColumnLabel,
   getLocalizedTabName,
   translate,
   type Language,
+  type ProjectSheetRole,
+  isTasksTab,
 } from '@/lib/data';
 
 interface Props {
   tab: SheetTab;
   projectId: string;
+  project: Project | null;
+  projectSheetRole: ProjectSheetRole;
   language: Language;
   onClose: () => void;
   onSave: (row: SheetRow) => void;
 }
 
-export function AddRowDrawer({ tab, projectId, language, onClose, onSave }: Props) {
+export function AddRowDrawer({ tab, projectId, project, projectSheetRole, language, onClose, onSave }: Props) {
   const [formData, setFormData] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     tab.columns.forEach(c => {
@@ -49,6 +53,16 @@ export function AddRowDrawer({ tab, projectId, language, onClose, onSave }: Prop
     }));
   }, [tab]);
 
+  const canEditField = (colKey: string) => {
+    if (projectSheetRole === 'pm') return true;
+    if (projectSheetRole === 'dev' && isTasksTab(tab.id)) {
+      const c = tab.columns.find(c => c.key === colKey);
+      if (c?.type === 'assignee') return false;
+      return c?.editable ?? false;
+    }
+    return false;
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -67,15 +81,18 @@ export function AddRowDrawer({ tab, projectId, language, onClose, onSave }: Prop
       setFormData(prev => ({ ...prev, [key]: nextValue }));
     };
 
+    const editable = canEditField(col.key);
+
     if (col.type === 'assignee') {
       return (
         <select
           value={value}
           onChange={e => setValue(e.target.value)}
-          className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+          disabled={!editable}
+          className={`w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40 ${!editable ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
           <option value="">{translate('Unassigned', language)}</option>
-          {getAssignableTeamProfiles().map(m => (
+          {getProjectDevelopers(project).map(m => (
             <option key={m.id} value={m.id}>{m.name}</option>
           ))}
         </select>
@@ -87,7 +104,8 @@ export function AddRowDrawer({ tab, projectId, language, onClose, onSave }: Prop
         <select
           value={value}
           onChange={e => setValue(e.target.value)}
-          className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+          disabled={!editable}
+          className={`w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40 ${!editable ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
           {(col.options ?? []).map(opt => (
             <option key={opt} value={opt}>{translate(opt, language)}</option>
@@ -102,7 +120,8 @@ export function AddRowDrawer({ tab, projectId, language, onClose, onSave }: Prop
           rows={4}
           value={value}
           onChange={e => setValue(e.target.value)}
-          className={`w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40 resize-none ${jaKey ? 'min-h-[100px]' : ''}`}
+          disabled={!editable}
+          className={`w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40 resize-none ${jaKey ? 'min-h-[100px]' : ''} ${!editable ? 'opacity-50 cursor-not-allowed' : ''}`}
         />
       );
     }
@@ -112,8 +131,8 @@ export function AddRowDrawer({ tab, projectId, language, onClose, onSave }: Prop
         type={col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'}
         value={value}
         onChange={e => setValue(e.target.value)}
-        readOnly={col.type === 'code'}
-        className={`w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40 ${col.type === 'code' ? 'font-mono border-brand-500/30' : ''}`}
+        readOnly={col.type === 'code' || !editable}
+        className={`w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40 ${col.type === 'code' ? 'font-mono border-brand-500/30' : ''} ${!editable && col.type !== 'code' ? 'opacity-50 cursor-not-allowed' : ''}`}
       />
     );
   };

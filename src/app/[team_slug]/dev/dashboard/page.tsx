@@ -16,13 +16,14 @@ export default function DevDashboardPage() {
     isLoading,
     language,
     setLanguage,
+    loggedInUser,
   } = useWorkspace();
 
   const handleSelectProject = useCallback((projectId: string) => {
     router.push(`/${teamSlug}/dev/projects/${projectId}/tasks`);
   }, [router, teamSlug]);
 
-  if (isLoading) return null;
+  if (isLoading || !loggedInUser) return null;
 
   return (
     <DevView
@@ -31,6 +32,7 @@ export default function DevDashboardPage() {
       onSelectProject={handleSelectProject}
       language={language}
       onLanguageChange={setLanguage}
+      user={loggedInUser}
     />
   );
 }

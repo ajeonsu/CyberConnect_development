@@ -24,8 +24,6 @@ function TeamRoleLayoutContent({ children }: { children: React.ReactNode }) {
     workspaceScope, 
     isLoading, 
     projects, 
-    sidebarCollapsed, 
-    setSidebarCollapsed, 
     handleLogout,
     updateMyProfile,
     updateCurrentTeam,
@@ -75,8 +73,6 @@ function TeamRoleLayoutContent({ children }: { children: React.ReactNode }) {
         user={loggedInUser}
         activeTabId={activeTabId || (pathname.includes('/dashboard') ? 'dashboard' : '')}
         visibleTabs={sheetTabs.filter(t => t.visibleTo.includes(role as any))}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         onTabChange={(id) => router.push(`/${teamSlug}/${role}/projects/${activeProjectId}/${id}`)}
         workspaceScope="team"
         teamMemberships={teamMemberships}
