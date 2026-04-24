@@ -92,6 +92,8 @@ export function Sidebar({
   const activeScope: WorkspaceScope = pathname.startsWith('/personal') ? 'personal' : 'team';
   
   const activeRole = user.activeWorkspaceRole || role;
+  /** Path segment for this layout (must match URL); do not use cookie alone or links break under /dev vs /pm. */
+  const routeRole = role;
   const roleLine = roleLabels[activeRole] || 'Member';
 
   // Find current team name robustly
@@ -136,7 +138,10 @@ export function Sidebar({
     router.push('/personal/dashboard');
   };
 
-  const projectBasePath = activeScope === 'personal' ? '/personal' : `/${currentTeamSlug}/${activeRole}`;
+  const projectBasePath = activeScope === 'personal' ? '/personal' : `/${currentTeamSlug}/${routeRole}`;
+  /** Role dashboards live at /[slug]/[role]/dashboard; there is no /projects index route for pm/dev/client. */
+  const projectBackHref =
+    activeScope === 'personal' ? '/personal/dashboard' : `${projectBasePath}/dashboard`;
 
   return (
     <div className={`${collapsed ? 'w-16' : 'w-60'} bg-surface-900 border-r border-surface-700 flex flex-col transition-all duration-200 shrink-0 relative`}>
@@ -257,7 +262,7 @@ export function Sidebar({
       {activeProject && !collapsed && (
         <div className="px-2 pt-2">
           <Link
-            href={activeRole === 'admin' ? `${projectBasePath}/dashboard` : `${projectBasePath}/projects`}
+            href={projectBackHref}
             className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-left transition-all bg-surface-800 border border-surface-700 hover:border-brand-500/30 group"
           >
             <div className={`w-7 h-7 rounded-lg bg-gradient-to-br ${activeProject.color} flex items-center justify-center shrink-0`}>
@@ -275,7 +280,7 @@ export function Sidebar({
       {activeProject && collapsed && (
         <div className="px-2 pt-2">
           <Link
-            href={activeRole === 'admin' ? `${projectBasePath}/dashboard` : `${projectBasePath}/projects`}
+            href={projectBackHref}
             className={`w-full flex items-center justify-center p-2.5 rounded-lg bg-gradient-to-br ${activeProject.color} hover:opacity-80 transition-opacity`}
             title={getLocalizedProjectName(activeProject, language)}
           >
@@ -297,7 +302,7 @@ export function Sidebar({
       />
 
       <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-        {activeRole === 'admin' && !collapsed && !showAdminDashboard && (
+        {routeRole === 'admin' && !collapsed && !showAdminDashboard && (
           <Link
             href={`${projectBasePath}/dashboard`}
             className={`flex items-center gap-2 px-3 py-3 mb-2 rounded-lg border transition-all ${
@@ -355,7 +360,7 @@ export function Sidebar({
           <div className="px-3 py-8 text-center">
             <FolderOpen className="w-8 h-8 text-gray-700 mx-auto mb-2" />
             <p className="text-gray-500 text-sm">
-              {pathname === `/${activeRole}/dashboard` ? 'Management overview' : 'Select a project'}
+              {pathname === projectBackHref ? 'Management overview' : 'Select a project'}
             </p>
             <p className="text-gray-600 text-xs mt-0.5">プロジェクトを選択</p>
           </div>
