@@ -1,0 +1,608 @@
+import type { SheetTab, SheetColumn, SheetRow, Project, UserProfile, UserRole } from '@/types';
+
+/** Project-scoped role for sheet read/write rules (distinct from URL/platform role). */
+export type ProjectSheetRole = 'pm' | 'dev' | 'client';
+
+/**
+ * Resolves the current user's role on a team project from pm_id, client_id, and project_members.
+ * Personal projects are treated as PM (owner). Platform admins use PM-level sheet access.
+ */
+export function getCurrentUserProjectSheetRole(
+  userId: string | undefined,
+  project: Project | null,
+  platformRole: UserRole
+): ProjectSheetRole {
+  if (!userId || !project) return 'client';
+  if (project.workspace_type === 'personal') return 'pm';
+  if (platformRole === 'admin') return 'pm';
+
+  const mine = project.projectMemberEntries?.find(m => m.profile_id === userId);
+  const isProjectDeveloper =
+    (project.assignedDevIds ?? []).includes(userId) || mine?.workspace_role === 'dev';
+
+  // Browsing …/dev/… should use developer sheet rules when this user is an assigned developer on the
+  // project, even if they are also the PM (`pm_id` would otherwise always win and show the full PM grid).
+  if (platformRole === 'dev' && isProjectDeveloper) {
+    return 'dev';
+  }
+
+  if (project.pm_id === userId) return 'pm';
+
+  if (mine?.workspace_role === 'pm') return 'pm';
+  if (mine?.workspace_role === 'dev') return 'dev';
+  if (mine?.workspace_role === 'client') return 'client';
+
+  if (project.client_id === userId) return 'client';
+  if (isProjectDeveloper) return 'dev';
+
+  if (platformRole === 'pm') return 'pm';
+  if (platformRole === 'dev') return 'dev';
+  return 'client';
+}
+
+/** DB column keys clients may edit (English + Japanese remark fields) per sheet; matches Supabase columns. */
+export function getClientRemarkColumnKeys(tabId: string): string[] {
+  switch (tabId) {
+    case 'tasks':
+      return ['remark', 'remark_ja'];
+    case 'screen_list':
+    case 'function_list':
+    case 'test_case':
+    case 'app_list':
+      return ['remarks', 'remarks_ja'];
+    default:
+      return [];
+  }
+}
+
+export function isTasksTab(tabId: string): boolean {
+  return tabId === 'tasks';
+}
+
+function col(key: string, label: string, labelJa: string, width: number, type: SheetColumn['type'] = 'text', editable = true, options?: string[]): SheetColumn {
+  return { key, label, labelJa, width, type, editable, options };
+}
+
+// ── User Profiles ─────────────────────────────────────────
+
+let cachedProfiles: UserProfile[] = [];
+
+export function setCachedProfiles(profiles: UserProfile[]) {
+  cachedProfiles = profiles;
+}
+
+export function getUserName(userId: string): string {
+  if (!userId) return 'None';
+  const profile = cachedProfiles.find(u => u.id === userId);
+  if (profile) return profile.name || profile.email || 'Unknown';
+  return 'Unknown';
+}
+
+export function getProfilesByRole(role: UserProfile['role']): UserProfile[] {
+  return cachedProfiles.filter(u => u.role === role);
+}
+
+/** All PM + developer accounts (unique). Any of these can be assigned as project PM or as a developer, including both on the same project. */
+export function getAssignableTeamProfiles(): UserProfile[] {
+  const seen = new Set<string>();
+  const out: UserProfile[] = [];
+  for (const role of ['pm', 'dev'] as const) {
+    for (const u of getProfilesByRole(role)) {
+      if (!seen.has(u.id)) {
+        seen.add(u.id);
+        out.push(u);
+      }
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+/** Profile IDs listed as developers on the project (team: `project_members.workspace_role = dev`). */
+export function getProjectDeveloperIds(project: Project | null): string[] {
+  return project?.assignedDevIds ?? [];
+}
+
+/** Only profiles assigned as developers to the specific project. */
+export function getProjectDevelopers(project: Project | null): UserProfile[] {
+  const ids = getProjectDeveloperIds(project);
+  if (!project || ids.length === 0) return [];
+  const devs = cachedProfiles.filter(u => ids.includes(u.id));
+  devs.sort((a, b) => a.name.localeCompare(b.name));
+  return devs;
+}
+
+/**
+ * Resolves task assignee to a profile id only if that person is a developer on this project.
+ * Team projects: restrict to `assignedDevIds`. Personal projects: any stored id is kept.
+ * Used so the grid, selects, and DB stay aligned (no "ghost" names for ids outside the dev list).
+ */
+export function getTaskAssigneeProfileIdForProject(row: SheetRow, project: Project | null): string | null {
+  const r = row as Record<string, unknown>;
+  const raw =
+    (typeof r.assignee === 'string' && r.assignee ? r.assignee : null) ??
+    (typeof r.assignee_id === 'string' && r.assignee_id ? r.assignee_id : null);
+  if (!raw) return null;
+  if (!project || project.workspace_type !== 'team') return raw;
+  const allowed = getProjectDeveloperIds(project);
+  return allowed.includes(raw) ? raw : null;
+}
+
+/** Primary PM on `projects.pm_id` or `project_members` row with workspace_role pm. */
+export function userSeesProjectAsPm(userId: string, project: Project): boolean {
+  if (project.pm_id === userId) return true;
+  return project.projectMemberEntries?.some(m => m.profile_id === userId && m.workspace_role === 'pm') ?? false;
+}
+
+/** Listed developer (`assignedDevIds` / project_members dev). */
+export function userSeesProjectAsDev(userId: string, project: Project): boolean {
+  if ((project.assignedDevIds ?? []).includes(userId)) return true;
+  return project.projectMemberEntries?.some(m => m.profile_id === userId && m.workspace_role === 'dev') ?? false;
+}
+
+/** Client stakeholder on `projects.client_id` or project_members client. */
+export function userSeesProjectAsClient(userId: string, project: Project): boolean {
+  if (project.client_id === userId) return true;
+  return project.projectMemberEntries?.some(m => m.profile_id === userId && m.workspace_role === 'client') ?? false;
+}
+
+/** PM or developer access (not client-only). */
+export function userSeesProjectAsTeamMember(userId: string, project: Project): boolean {
+  return userSeesProjectAsPm(userId, project) || userSeesProjectAsDev(userId, project);
+}
+
+export function getProjectCountForUser(userId: string, role: UserProfile['role'], projectList: Project[]): number {
+  if (role === 'pm') return projectList.filter(p => userSeesProjectAsPm(userId, p)).length;
+  if (role === 'dev') return projectList.filter(p => userSeesProjectAsDev(userId, p)).length;
+  if (role === 'client') return projectList.filter(p => userSeesProjectAsClient(userId, p)).length;
+  return projectList.length;
+}
+
+export type Language = 'en' | 'ja';
+
+export function getLocalizedTabName(tab: SheetTab, lang: Language): string {
+  return lang === 'ja' ? tab.nameJa : tab.name;
+}
+
+export function getLocalizedColumnLabel(col: SheetColumn, lang: Language): string {
+  return lang === 'ja' ? col.labelJa : col.label;
+}
+
+export function getLocalizedProjectName(project: Project, lang: Language): string {
+  if (lang === 'ja') {
+    return project.name_ja || project.nameJa || project.name;
+  }
+  return project.name;
+}
+
+const bilingualRowFieldMap: Record<string, Record<string, string>> = {
+  purpose: {
+    major_item: 'major_item_ja',
+    content: 'content_ja',
+    details: 'details_ja',
+  },
+  tech_stack: {
+    major_item: 'major_item_ja',
+    medium_item: 'medium_item_ja',
+    content: 'content_ja',
+  },
+  non_func: {
+    major_item: 'major_item_ja',
+    medium_item: 'medium_item_ja',
+    content: 'content_ja',
+  },
+  screen_list: {
+    user_category: 'user_category_ja',
+    major_item: 'major_item_ja',
+    medium_item: 'medium_item_ja',
+    screen_name: 'screen_name_ja',
+    overview: 'overview_ja',
+    remarks: 'remarks_ja',
+  },
+  function_list: {
+    user_category: 'user_category_ja',
+    main_category: 'main_category_ja',
+    subcategory: 'subcategory_ja',
+    screen_name: 'screen_name_ja',
+    function_name: 'function_name_ja',
+    function_details: 'function_details_ja',
+    remarks: 'remarks_ja',
+  },
+  tasks: {
+    epic: 'epic_ja',
+    task: 'task_ja',
+    remark: 'remark_ja',
+  },
+  test_case: {
+    category: 'category_ja',
+    scenario_name: 'scenario_name_ja',
+    summary: 'summary_ja',
+    test_steps: 'test_steps_ja',
+    expected_results: 'expected_results_ja',
+    remarks: 'remarks_ja',
+  },
+  app_list: {
+    category: 'category_ja',
+    service_name: 'service_name_ja',
+    api_name: 'api_name_ja',
+    auth_method: 'auth_method_ja',
+    data_handling: 'data_handling_ja',
+    remarks: 'remarks_ja',
+  },
+  backlog: {
+    epic: 'epic_ja',
+    story: 'story_ja',
+    task: 'task_ja',
+  },
+  process_chart: {
+    category: 'category_ja',
+    task: 'task_ja',
+  },
+};
+
+export function getBilingualRowFieldKey(tabId: string, key: string): string | null {
+  return bilingualRowFieldMap[tabId]?.[key] ?? null;
+}
+
+export const sheetTabs: SheetTab[] = [
+  {
+    id: 'purpose',
+    name: 'Purpose',
+    nameJa: '概要',
+    icon: 'FileText',
+    visibleTo: ['admin', 'pm', 'client'],
+    columns: [
+      col('major_item', 'Major Item', '大項目', 160, 'text', true),
+      col('content', 'Purpose / Goal', '目的・ゴール', 300, 'longtext', true),
+      col('details', 'Details', '詳細', 400, 'longtext', true),
+    ],
+    guestEditableColumns: [],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'tech_stack',
+    name: 'Technical Stack',
+    nameJa: '技術スタック',
+    icon: 'Server',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('major_item', 'Major Items', '大項目', 160, 'text', true),
+      col('medium_item', 'Medium Item', '中項目', 160, 'text', true),
+      col('content', 'Content', '内容', 500, 'longtext', true),
+    ],
+    guestEditableColumns: [],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'non_func',
+    name: 'Non-Functional',
+    nameJa: '非機能要件',
+    icon: 'ShieldCheck',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('major_item', 'Major Item', '大項目', 120, 'text', true),
+      col('medium_item', 'Medium Item', '中項目', 160, 'text', true),
+      col('content', 'Content', '内容', 500, 'longtext', true),
+    ],
+    guestEditableColumns: [],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'screen_list',
+    name: 'Screens',
+    nameJa: '画面一覧',
+    icon: 'Monitor',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('screen_code', 'Code', '画面ID', 100, 'code', false),
+      col('user_category', 'User', 'ユーザー', 120, 'text', true),
+      col('major_item', 'Major', '大項目', 120, 'text', true),
+      col('medium_item', 'Medium', '中項目', 120, 'text', true),
+      col('screen_name', 'Name', '画面名', 180, 'text', true),
+      col('path', 'Path', 'パス', 160, 'text', true),
+      col('overview', 'Overview', '概要', 250, 'longtext', true),
+      col('status', 'Status', 'ステータス', 130, 'status', true, ['Not started', 'In progress', 'Completed', 'Need to be checked']),
+      col('completion_dev', 'Dev', '開発完了', 80, 'status', true, ['', 'Done']),
+      col('completion_client', 'Client', 'クライアント完了', 80, 'status', true, ['', 'Done']),
+      col('remarks', 'Remarks', '備考', 250, 'longtext', true),
+    ],
+    guestEditableColumns: ['remarks'],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'function_list',
+    name: 'Functions',
+    nameJa: '機能一覧',
+    icon: 'Puzzle',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('function_code', 'Code', '機能ID', 100, 'code', false),
+      col('phase', 'Phase', 'フェーズ', 100, 'select', true, ['MVP', 'v2', 'v3']),
+      col('user_category', 'User', 'ユーザー', 120, 'text', true),
+      col('main_category', 'Main', '大項目', 140, 'text', true),
+      col('subcategory', 'Sub', '中項目', 140, 'text', true),
+      col('screen_code', 'Screen', '画面ID', 100, 'text', true),
+      col('screen_name', 'Screen Name', '画面名', 160, 'text', true),
+      col('function_name', 'Function', '機能名', 180, 'text', true),
+      col('function_details', 'Details', '詳細', 300, 'longtext', true),
+      col('effort', 'Effort', '工数', 80, 'text', true),
+      col('status', 'Status', 'ステータス', 130, 'status', true, ['Not started', 'In progress', 'Completed', 'Need to be checked']),
+      col('completion_dev', 'Dev', '開発完了', 80, 'status', true, ['', 'Done']),
+      col('completion_client', 'Client', 'クライアント完了', 80, 'status', true, ['', 'Done']),
+      col('remarks', 'Remarks', '備考', 250, 'longtext', true),
+    ],
+    guestEditableColumns: ['remarks'],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'tasks',
+    name: 'Tasks',
+    nameJa: 'タスク',
+    icon: 'CheckSquare',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('task_code', 'Code', 'タスクID', 100, 'code', false),
+      col('phase', 'Phase', 'フェーズ', 100, 'select', true, ['MVP', 'v2', 'v3']),
+      col('sprint', 'Sprint', 'スプリント', 100, 'text', true),
+      col('epic', 'Epic', 'エピック', 140, 'text', true),
+      col('screen_code', 'Screen', '画面ID', 100, 'text', true),
+      col('function_code', 'Function', '機能ID', 100, 'text', true),
+      col('task', 'Task', 'タスク', 250, 'text', true),
+      col('person_day', 'P/Day', '工数', 80, 'number', true),
+      col('assignee', 'Assignee', '担当者', 140, 'assignee', true),
+      col('status', 'Status', 'ステータス', 130, 'status', true, ['Not started', 'In progress', 'Done', 'Blocked', 'Need to be checked']),
+      col('deadline', 'Deadline', '期限', 120, 'date', true),
+      col('completed_date', 'Done At', '完了日', 120, 'date', true),
+      col('completion_pm', 'PM Check', 'PM確認', 100, 'select', true, ['', 'Check']),
+      col('remark', 'Remark (EN)', '備考（英語）', 250, 'longtext', true),
+      col('remark_ja', 'Remark (JA)', '備考（日本語）', 250, 'longtext', true),
+    ],
+    guestEditableColumns: ['remark', 'remark_ja'],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'test_case',
+    name: 'Test Cases',
+    nameJa: 'テストケース',
+    icon: 'FlaskConical',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('category', 'Category', 'カテゴリ', 150, 'text', true),
+      col('scenario_name', 'Scenario', 'シナリオ', 150, 'text', true),
+      col('test_type', 'Type', '種別', 100, 'text', true),
+      col('summary', 'Summary', '概要', 250, 'longtext', true),
+      col('test_steps', 'Steps', '手順', 300, 'longtext', true),
+      col('expected_results', 'Expected', '期待値', 250, 'longtext', true),
+      col('status', 'Status', 'ステータス', 100, 'status', true, ['', 'Pass', 'Fail']),
+      col('tester', 'Tester', '実施者', 120, 'text', true),
+      col('remarks', 'Remarks', '備考', 200, 'longtext', true),
+    ],
+    guestEditableColumns: [],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'app_list',
+    name: 'API List',
+    nameJa: 'API一覧',
+    icon: 'Plug',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('category', 'Category', 'カテゴリ', 120, 'text', true),
+      col('service_name', 'Service', 'サービス', 140, 'text', true),
+      col('api_name', 'API Name', 'API名', 160, 'text', true),
+      col('auth_method', 'Auth', '認証', 120, 'text', true),
+      col('data_handling', 'Data', 'データ', 250, 'longtext', true),
+      col('realtime', 'Realtime', 'リアルタイム', 100, 'select', true, ['No', 'Yes', 'Partial']),
+      col('mvp_required', 'Required', '必要性', 100, 'select', true, ['MVP', 'v2', 'v3']),
+      col('status', 'Status', 'ステータス', 130, 'status', true, ['Not started', 'In progress', 'Completed']),
+      col('remarks', 'Remarks', '備考', 200, 'longtext', true),
+    ],
+    guestEditableColumns: [],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'backlog',
+    name: 'Backlog',
+    nameJa: 'バックログ',
+    icon: 'ListTodo',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('epic', 'Epic', 'エピック', 140, 'text', true),
+      col('story', 'Story', 'ストーリー', 180, 'text', true),
+      col('task', 'Task', 'タスク', 300, 'longtext', true),
+      col('owner', 'Owner', 'オーナー', 120, 'text', true),
+      col('sprint', 'Sprint', 'スプリント', 100, 'text', true),
+    ],
+    guestEditableColumns: [],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'process_chart',
+    name: 'Process Chart',
+    nameJa: '工程表',
+    icon: 'GanttChart',
+    visibleTo: ['admin', 'pm', 'dev', 'client'],
+    columns: [
+      col('code', 'Code', 'ID', 100, 'text', true),
+      col('category', 'Category', 'カテゴリ', 120, 'text', true),
+      col('task', 'Task', 'タスク', 300, 'text', true),
+      col('sprint', 'Sprint', 'スプリント', 120, 'text', true),
+      col('person_days', 'P/Days', '工数', 100, 'text', true),
+      col('status', 'Status', 'ステータス', 130, 'status', true, ['Planned', 'In progress', 'Completed', 'Deprecated']),
+    ],
+    guestEditableColumns: [],
+    pmCanAddRows: true,
+  },
+  {
+    id: 'master_schedule',
+    name: 'Master Schedule',
+    nameJa: 'マスタースケジュール',
+    icon: 'Calendar',
+    visibleTo: ['admin', 'pm', 'client'],
+    columns: [],
+    guestEditableColumns: [],
+    pmCanAddRows: false,
+    isSpecialView: true,
+  },
+];
+
+// ── Authentication Helpers ──────────────────────────────────
+
+export function normalizeDemoGateEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+export function isDemoAdminGateEmail(email: string): boolean {
+  const n = normalizeDemoGateEmail(email);
+  return n === 'admin@gmail.com' || n === 'admin@cyberconnect.io';
+}
+
+export function isRecognizedDemoGateEmail(email: string): boolean {
+  return email.trim().length > 0;
+}
+
+export function getDemoGateEmailForUserId(userId: string): string | null {
+  return cachedProfiles.find(u => u.id === userId)?.email ?? null;
+}
+
+// ── Counter for new codes ─────────────────────────────────
+
+const counters: Record<string, number> = {};
+
+export function generateCode(prefix: string, projectId: string): string {
+  const key = `${projectId}-${prefix}`;
+  counters[key] = (counters[key] || 0) + 1;
+  // Add a random suffix to prevent collisions across sessions/users
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  return `${prefix}-${String(counters[key]).padStart(2, '0')}-${random}`;
+}
+
+export function translate(key: string, lang: Language): string {
+  if (lang === 'en') return key;
+  return translations[key] ?? key;
+}
+
+export function getLocalizedCell(row: SheetRow, key: string, lang: Language): string {
+  // If the value is a UUID (assignee_id, owner_id, etc), resolve it to a name
+  const val = String(row[key] ?? '');
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  
+  if (uuidRegex.test(val) && (key === 'assignee' || key === 'owner' || key === 'tester' || key === 'assignee_id' || key === 'owner_id' || key === 'tester_id')) {
+    return getUserName(val);
+  }
+
+  if (lang === 'en') return val;
+  const jaKey = `${key}_ja`;
+  if (typeof row[jaKey] === 'string' && row[jaKey] !== '') return row[jaKey] as string;
+  return val;
+}
+
+export const translations: Record<string, string> = {
+  'Add New': '新規追加',
+  'Add Row': '行を追加',
+  'Add First Row': '最初の行を追加',
+  'Cancel': 'キャンセル',
+  'Save Row': '保存',
+  'Field': '項目',
+  'Japanese': '日本語',
+  'English': '英語',
+  'No data in this sheet': 'このシートにはデータがありません',
+  'Not started': '未着手',
+  'In progress': '進行中',
+  'Completed': '完了',
+  'Done': '完了',
+  'Blocked': 'ブロック',
+  'Need to be checked': '要確認',
+  'Pass': '合格',
+  'Fail': '不合格',
+  'Planned': '計画',
+  'Deprecated': '廃止',
+  'MVP': 'MVP（最小版）',
+  'v2': 'v2',
+  'v3': 'v3',
+  'Unassigned': '未割当',
+  'true': 'はい',
+  'false': 'いいえ',
+  // Dashboards (role + personal)
+  'Executive Dashboard': 'エグゼクティブダッシュボード',
+  'Global monitor': '全体モニター',
+  'Staff Seats': 'スタッフ席',
+  'Near Limit': '上限近し',
+  'New Project': '新規プロジェクト',
+  'Global Progress': '全体の進捗',
+  'Global Task Distribution': 'タスク分布（全体）',
+  'Platform Status': 'プラットフォーム状態',
+  'Project Management': 'プロジェクト管理',
+  'Active Projects — Your assigned management dashboard': '担当プロジェクト — PMダッシュボード',
+  'No projects assigned as PM': 'PMとして割り当てられたプロジェクトはありません',
+  "You currently don't have any projects where you are assigned as the Project Manager.":
+    'プロジェクトマネージャーとして割り当てられたプロジェクトがありません。',
+  'Overall Progress': '全体の進捗',
+  'In Dev': '開発中',
+  'Pending': '未着手',
+  'Developer Portal': '開発者ポータル',
+  'Engineering — Task oversight and assigned system components': 'エンジニアリング — タスクと担当領域',
+  'No developer assignments': '開発者としての割当がありません',
+  'You are not currently assigned to any team projects as a Developer.':
+    'チームプロジェクトに開発者として割り当てられていません。',
+  'Assigned Tasks': '担当タスク',
+  'In Progress': '進行中',
+  'Assigned Projects': '担当プロジェクト',
+  'Primary Tech Stack': '主な技術スタック',
+  'more': '件以上',
+  'No stack defined yet': '技術スタック未登録',
+  'Client Portal': 'クライアントポータル',
+  'Project Oversight — Transparency and progress tracking': 'プロジェクトの可視化と進捗の把握',
+  'No projects accessible': '参照できるプロジェクトがありません',
+  'You are not currently listed as a client for any active projects.':
+    'アクティブなプロジェクトのクライアントとして登録されていません。',
+  'Primary Stakeholder Dashboard': 'ステークホルダー向けダッシュボード',
+  'Status': 'ステータス',
+  'Healthy': '順調',
+  'Completion': '完了率',
+  'Your Workspace': 'マイワークスペース',
+  'Private — Manage your individual projects and roadmaps': 'プライベート — 個人プロジェクトとロードマップ',
+  'Join Team': 'チームに参加',
+  'Create Your Team': 'チームを作成',
+  'Personal Free Plan': '個人無料プラン',
+  'Management overview': '管理の概要',
+  'Select a project': 'プロジェクトを選択',
+  'Total Projects': 'プロジェクト総数',
+  'Tasks Completed': '完了タスク',
+  'Blocked Items': 'ブロック中',
+  'Managed Projects': '管理中のプロジェクト',
+  'Progress': '進捗',
+  'Block': 'ブロック',
+  'Invite': '招待',
+  'Delete': '削除',
+  'Developers': '開発者',
+  'Assign': '割当',
+  'Active': 'アクティブ',
+  'On Hold': '保留',
+  'Health': 'ヘルス',
+  'Latency': 'レイテンシ',
+  'PM': 'PM',
+  'Select PM': 'PMを選択',
+  'Unassign': '解除',
+  'You (Admin)': 'あなた（管理者）',
+  'Not Started': '未着手',
+  'Development Milestone Progress': '開発マイルストーンの進捗',
+  'Recent Stakeholder Feedback & Remarks': '最近のフィードバックと備考',
+  'Build something amazing': 'さあ、始めましょう',
+  'Start your first personal project to organize your bilingual requirements and tasks.':
+    '最初の個人プロジェクトを作成し、日英の要件とタスクを整理しましょう。',
+  'Create Your First Project': '最初のプロジェクトを作成',
+  'Created': '作成',
+  'Open Workspace': 'ワークスペースを開く',
+  'Delete Project': 'プロジェクトを削除',
+  'Join Team by Code': 'コードでチームに参加',
+  'Enter the invite code from your team admin.': '管理者から受け取った招待コードを入力してください。',
+  'Invite Code': '招待コード',
+  'Upgrade to Team': 'チーム版にアップグレード',
+  'Create a professional workspace to collaborate with your team and manage multiple projects.':
+    'チームと協業し、複数プロジェクトを管理するプロ用ワークスペースを作成します。',
+  'Company Name': '会社名',
+  'Company Slug (URL)': '会社スラッグ（URL）',
+  'Confirm & Purchase': '確定して購入',
+  'Tasks': 'タスク',
+};

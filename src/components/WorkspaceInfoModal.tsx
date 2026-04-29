@@ -1,0 +1,192 @@
+import { useEffect, useState } from 'react';
+import type { Team, UserProfile } from '@/types';
+import { X, Save, RefreshCw, Copy } from 'lucide-react';
+
+interface Props {
+  open: boolean;
+  scope: 'team' | 'personal';
+  user: UserProfile;
+  team: Team | null;
+  canSeeInviteCode: boolean;
+  onClose: () => void;
+  onSavePersonal: (updates: { name: string; department: string }) => Promise<void>;
+  onSaveTeam: (updates: { name: string }) => Promise<void>;
+  onRegenerateInvite: () => Promise<string>;
+}
+
+export function WorkspaceInfoModal({
+  open,
+  scope,
+  user,
+  team,
+  canSeeInviteCode,
+  onClose,
+  onSavePersonal,
+  onSaveTeam,
+  onRegenerateInvite,
+}: Props) {
+  const [name, setName] = useState('');
+  const [department, setDepartment] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [inviteCode, setInviteCode] = useState(team?.invite_code ?? '');
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
+
+  useEffect(() => {
+    if (!open) return;
+    setName(scope === 'personal' ? user.name : team?.name ?? '');
+    setDepartment(user.department ?? '');
+    setInviteCode(team?.invite_code ?? '');
+    setCopyStatus('idle');
+  }, [open, scope, user, team]);
+
+  if (!open) return null;
+
+  const handleCopy = async () => {
+    if (!inviteCode) return;
+    try {
+      await navigator.clipboard.writeText(inviteCode);
+      setCopyStatus('copied');
+      setTimeout(() => setCopyStatus('idle'), 1200);
+    } catch {
+      // ignore clipboard issues
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSaving(true);
+    try {
+      if (scope === 'personal') {
+        await onSavePersonal({ name, department });
+      } else {
+        await onSaveTeam({ name });
+      }
+      onClose();
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    const code = await onRegenerateInvite();
+    setInviteCode(code);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 py-6" onClick={onClose}>
+      <div className="w-full max-w-lg bg-surface-900 border border-surface-700 rounded-2xl shadow-2xl overflow-hidden animate-fade-in" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-surface-700 bg-surface-850/50">
+          <div>
+            <h2 className="text-sm font-bold text-white">{scope === 'personal' ? 'Personal Space Info' : 'Team Info'}</h2>
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              {scope === 'personal' ? 'Edit your personal workspace details' : 'Edit team details and invite code'}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors p-1 rounded-lg hover:bg-surface-800">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1.5">{scope === 'personal' ? 'Display Name' : 'Team Name'}</label>
+            <input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="w-full bg-surface-800 border border-surface-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+              placeholder={scope === 'personal' ? 'Your name' : 'Team name'}
+            />
+          </div>
+
+          {scope === 'personal' ? (
+            <>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1.5">Email</label>
+                <input
+                  value={user.email}
+                  disabled
+                  className="w-full bg-surface-800 border border-surface-700 rounded-xl px-4 py-3 text-gray-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1.5">Department</label>
+                <input
+                  value={department}
+                  onChange={e => setDepartment(e.target.value)}
+                  className="w-full bg-surface-800 border border-surface-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+                  placeholder="Engineering"
+                />
+              </div>
+            </>
+          ) : canSeeInviteCode ? (
+            <>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1.5">Team Slug</label>
+                <input
+                  value={team?.slug ?? ''}
+                  disabled
+                  className="w-full bg-surface-800 border border-surface-700 rounded-xl px-4 py-3 text-gray-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1.5">Invite Code</label>
+                <div className="flex gap-2">
+                  <input
+                    value={inviteCode}
+                    readOnly
+                    className="flex-1 bg-surface-800 border border-surface-700 rounded-xl px-4 py-3 text-white font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopy}
+                    className="px-3 py-3 rounded-xl bg-surface-800 border border-surface-700 text-gray-300 hover:text-white hover:border-brand-500/40"
+                    title="Copy invite code"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRegenerate}
+                    className="px-3 py-3 rounded-xl bg-surface-800 border border-surface-700 text-gray-300 hover:text-white hover:border-brand-500/40"
+                    title="Regenerate invite code"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  Share this code with new users so they can join the team.
+                </p>
+                {copyStatus === 'copied' && (
+                  <p className="text-[10px] text-emerald-400 mt-1">Copied to clipboard.</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-surface-700 bg-surface-800/60 p-4 text-sm text-gray-400">
+              Only the team administrator can view or regenerate the invite code.
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-3 rounded-xl border border-surface-700 text-gray-300 hover:text-white hover:bg-surface-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSaving || !name.trim()}
+              className="flex-1 px-4 py-3 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white font-medium flex items-center justify-center gap-2"
+            >
+              <Save className="w-4 h-4" />
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
