@@ -50,6 +50,9 @@ interface WorkspaceContextType {
   addSheetRow: (projectId: string, tabId: string, newRow: SheetRow) => Promise<SheetRow>;
   deleteSheetRow: (projectId: string, tabId: string, rowId: string) => Promise<void>;
   refreshTeamMemberships: () => Promise<void>;
+  /** Admin dashboard: which project is selected in the main workspace panel. */
+  selectedAdminProjectId: string | null;
+  setSelectedAdminProjectId: (id: string | null) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
@@ -69,6 +72,7 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
   const [sheetData, setSheetData] = useState<Record<string, Record<string, SheetRow[]>>>({});
   const [sheetLoadingProjects, setSheetLoadingProjects] = useState<Record<string, boolean>>({});
   const [language, setLanguage] = useState<Language>('en');
+  const [selectedAdminProjectId, setSelectedAdminProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -598,6 +602,8 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     addSheetRow,
     deleteSheetRow,
     refreshTeamMemberships,
+    selectedAdminProjectId,
+    setSelectedAdminProjectId,
   };
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

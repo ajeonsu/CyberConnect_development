@@ -23,6 +23,18 @@ export function isTeamAdminOrOwner(
   return m.team.owner_id === userId;
 }
 
+/** Team project: user may edit sheets / PM workflow if admin/owner or assigned PM or Dev on this project. */
+export function userCanEditTeamProjectContent(
+  userId: string | undefined,
+  project: Project,
+  teamSlug: string | undefined,
+  teamMemberships: TeamMembership[]
+): boolean {
+  if (!userId) return false;
+  if (isTeamAdminOrOwner(userId, teamSlug, teamMemberships)) return true;
+  return userSeesProjectAsPm(userId, project) || userSeesProjectAsDev(userId, project);
+}
+
 /**
  * Resolves sheet UI rules for the current user on a project.
  * Team workspaces: edit rights come only from project assignment (PM/Dev), client stakeholder rows,

@@ -1,7 +1,8 @@
 'use client';
 
 import { useWorkspace } from '@/components/WorkspaceProvider';
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
+import { useParams } from 'next/navigation';
 import { AdminView } from './views/AdminView';
 import { PMView } from './views/PMView';
 import { DevView } from './views/DevView';
@@ -17,6 +18,7 @@ interface Props {
 
 export default function DashboardDispatcher({ activeRole, serverStats }: Props) {
   const router = useRouter();
+  const params = useParams();
   const { 
     projects, 
     visibleProjects,
@@ -27,10 +29,12 @@ export default function DashboardDispatcher({ activeRole, serverStats }: Props) 
     handleAddProject, 
     handleDeleteProject, 
     loggedInUser,
-    workspaceScope,
     language,
     setLanguage,
   } = useWorkspace();
+
+  const teamSlug =
+    typeof params?.team_slug === 'string' ? params.team_slug : activeRole;
 
   const handleSelectProject = useCallback((projectId: string) => {
     router.push(`/${activeRole}/project/${projectId}`);
@@ -58,6 +62,7 @@ export default function DashboardDispatcher({ activeRole, serverStats }: Props) 
     case 'administrator':
       return (
         <AdminView
+          teamSlug={teamSlug}
           projects={projects}
           getSheetData={getSheetData}
           onSelectProject={handleSelectProject}

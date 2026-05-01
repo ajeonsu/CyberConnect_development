@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, useRef, useEffect } from 'react';
+import { AdminDashboardProjectRail } from '@/components/admin/AdminDashboardProjectRail';
 import type { UserRole, UserProfile, SheetTab, Project, TeamMembership } from '@/types';
 import {
   ChevronLeft, ChevronRight, LogOut, FolderOpen, ArrowLeft, BarChart3,
@@ -75,6 +76,29 @@ export function Sidebar({
   const [showWorkspaceInfoModal, setShowWorkspaceInfoModal] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  const isAdminDashboardRoute = showAdminDashboard && role === 'admin';
+  const [adminRailCollapsed, setAdminRailCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (!isAdminDashboardRoute) return;
+    try {
+      if (window.localStorage.getItem('cyberconnect-admin-sidebar-collapsed') === '1') {
+        setAdminRailCollapsed(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [isAdminDashboardRoute]);
+
+  useEffect(() => {
+    if (!isAdminDashboardRoute) return;
+    try {
+      window.localStorage.setItem('cyberconnect-admin-sidebar-collapsed', adminRailCollapsed ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [adminRailCollapsed, isAdminDashboardRoute]);
+
   // URL-Based Scope State
   const activeScope: WorkspaceScope = pathname.startsWith('/personal') ? 'personal' : 'team';
   
@@ -136,11 +160,26 @@ export function Sidebar({
     activeScope === 'personal' ? '/personal/dashboard' : `${projectBasePath}/dashboard`;
 
   return (
-    <div className="w-60 bg-surface-900 border-r border-surface-700 flex flex-col transition-all duration-200 shrink-0 relative">
-      <div className="p-4 flex items-center gap-3 border-b border-surface-700 relative" ref={dropdownRef}>
-        <div 
+    <div
+      className={`relative flex min-h-0 shrink-0 flex-col overflow-hidden border-r border-surface-700 bg-surface-900 transition-[width,min-width,max-width] duration-300 ease-out ${
+        isAdminDashboardRoute
+          ? adminRailCollapsed
+            ? 'w-[72px] min-w-[72px] max-w-[72px]'
+            : 'w-[280px] min-w-[260px] max-w-[300px]'
+          : 'w-60'
+      }`}
+    >
+      <div
+        className={`relative flex items-center gap-3 border-b border-surface-700 p-4 ${
+          isAdminDashboardRoute && adminRailCollapsed ? 'justify-center px-2 py-3' : ''
+        }`}
+        ref={dropdownRef}
+      >
+        <div
           onClick={() => setShowWorkspaceDropdown(!showWorkspaceDropdown)}
-          className="flex items-center gap-3 cursor-pointer group flex-1 min-w-0"
+          className={`group flex cursor-pointer items-center gap-3 ${
+            isAdminDashboardRoute && adminRailCollapsed ? 'min-w-0 flex-initial justify-center' : 'min-w-0 flex-1'
+          }`}
         >
           <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${activeScope === 'personal' ? 'from-emerald-500 to-emerald-700' : 'from-brand-500 to-brand-700'} flex items-center justify-center shrink-0 shadow-lg group-hover:scale-105 transition-transform`}>
             {activeScope === 'personal' ? <UserRound className="w-4 h-4 text-white" /> : <Building2 className="w-4 h-4 text-white" />}
@@ -148,7 +187,7 @@ export function Sidebar({
           <button
             type="button"
             onClick={() => setShowWorkspaceInfoModal(true)}
-            className="min-w-0 flex-1 text-left"
+            className={`min-w-0 flex-1 text-left ${isAdminDashboardRoute && adminRailCollapsed ? 'hidden' : ''}`}
           >
             <h2 className="text-white font-semibold text-sm truncate flex items-center gap-1.5">
               {activeScope === 'personal' ? 'Personal Space' : currentTeamName}
@@ -160,7 +199,9 @@ export function Sidebar({
         <button
           type="button"
           onClick={() => setShowWorkspaceDropdown(!showWorkspaceDropdown)}
-          className="text-gray-500 hover:text-gray-300 transition-colors shrink-0"
+          className={`shrink-0 text-gray-500 transition-colors hover:text-gray-300 ${
+            isAdminDashboardRoute && adminRailCollapsed ? 'hidden' : ''
+          }`}
         >
           <ChevronDown className={`w-3 h-3 transition-transform ${showWorkspaceDropdown ? 'rotate-180' : ''}`} />
         </button>
@@ -201,19 +242,23 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="px-4 py-2.5 border-b border-surface-700">
+      <div
+        className={`border-b border-surface-700 px-4 py-2.5 ${
+          isAdminDashboardRoute && adminRailCollapsed ? 'flex justify-center px-2 py-2' : ''
+        }`}
+      >
         <div className="flex items-center gap-2.5">
           <div className={`w-6 h-6 rounded-full ${roleColors[activeRole] || 'bg-surface-700'} flex items-center justify-center shrink-0 shadow-inner`}>
             <span className="text-white text-[9px] font-bold">{user.name.charAt(0).toUpperCase()}</span>
           </div>
-          <div className="min-w-0 flex-1">
+          <div className={`min-w-0 flex-1 ${isAdminDashboardRoute && adminRailCollapsed ? 'hidden' : ''}`}>
             <p className="text-gray-300 text-xs font-medium truncate">{user.name}</p>
             <p className="text-gray-600 text-[10px] truncate uppercase tracking-tight">{roleLine}</p>
           </div>
         </div>
       </div>
 
-      {activeProject && (
+      {activeProject && !isAdminDashboardRoute && (
         <div className="px-2 pt-2">
           <Link
             href={projectBackHref}
@@ -243,64 +288,74 @@ export function Sidebar({
         onRegenerateInvite={onRegenerateCurrentTeamInviteCode}
       />
 
-      <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-        {routeRole === 'admin' && !showAdminDashboard && (
-          <Link
-            href={`${projectBasePath}/dashboard`}
-            className={`flex items-center gap-2 px-3 py-3 mb-2 rounded-lg border transition-all ${
-              pathname === `${projectBasePath}/dashboard`
-                ? 'bg-brand-600/15 border-brand-500/30 text-brand-300'
-                : 'bg-transparent border-transparent text-gray-400 hover:bg-surface-800'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4" />
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium">Admin Dashboard</div>
-              <p className="text-[10px] text-gray-500">Global overview</p>
-            </div>
-          </Link>
-        )}
-
-        {activeProject ? (
-          visibleTabs.map(tab => {
-            const Icon = iconMap[tab.icon] ?? FileText;
-            const isActive = activeTabId === tab.id;
-            const count = tab.isSpecialView ? null : getTabRowCount(tab.id);
-
-            return (
+      <nav className="flex min-h-0 flex-1 flex-col overflow-hidden p-2">
+        {isAdminDashboardRoute ? (
+          <AdminDashboardProjectRail
+            teamSlug={currentTeamSlug}
+            collapsed={adminRailCollapsed}
+            onCollapsedChange={setAdminRailCollapsed}
+          />
+        ) : (
+          <>
+            {routeRole === 'admin' && !showAdminDashboard && (
               <Link
-                key={tab.id}
-                href={`${projectBasePath}/projects/${activeProject.id}/${tab.id}`}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all ${
-                  isActive
-                    ? 'bg-brand-600/15 text-brand-300'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-surface-800'
+                href={`${projectBasePath}/dashboard`}
+                className={`mb-2 flex items-center gap-2 rounded-lg border px-3 py-3 transition-all ${
+                  pathname === `${projectBasePath}/dashboard`
+                    ? 'border-brand-500/30 bg-brand-600/15 text-brand-300'
+                    : 'border-transparent bg-transparent text-gray-400 hover:bg-surface-800'
                 }`}
               >
-                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-brand-400' : ''}`} />
+                <BarChart3 className="h-4 w-4" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-medium truncate">{getLocalizedTabName(tab, language)}</div>
+                  <div className="text-xs font-medium">Admin Dashboard</div>
+                  <p className="text-[10px] text-gray-500">Global overview</p>
                 </div>
-                {count !== null && count > 0 && (
-                  <span
-                    className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
-                      isActive ? 'bg-brand-500/20 text-brand-300' : 'bg-surface-800 text-gray-500'
-                    }`}
-                  >
-                    {count}
-                  </span>
-                )}
               </Link>
-            );
-          })
-        ) : (
-          <div className="px-3 py-8 text-center">
-            <FolderOpen className="w-8 h-8 text-gray-700 mx-auto mb-2" />
-            <p className="text-gray-500 text-sm">
-              {pathname === projectBackHref ? 'Management overview' : 'Select a project'}
-            </p>
-            <p className="text-gray-600 text-xs mt-0.5">プロジェクトを選択</p>
-          </div>
+            )}
+
+            <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+              {activeProject ? (
+                visibleTabs.map(tab => {
+                  const Icon = iconMap[tab.icon] ?? FileText;
+                  const isActive = activeTabId === tab.id;
+                  const count = tab.isSpecialView ? null : getTabRowCount(tab.id);
+
+                  return (
+                    <Link
+                      key={tab.id}
+                      href={`${projectBasePath}/projects/${activeProject.id}/${tab.id}`}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all ${
+                        isActive ? 'bg-brand-600/15 text-brand-300' : 'text-gray-400 hover:bg-surface-800 hover:text-gray-200'
+                      }`}
+                    >
+                      <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-brand-400' : ''}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium">{getLocalizedTabName(tab, language)}</div>
+                      </div>
+                      {count !== null && count > 0 && (
+                        <span
+                          className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                            isActive ? 'bg-brand-500/20 text-brand-300' : 'bg-surface-800 text-gray-500'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      )}
+                    </Link>
+                  );
+                })
+              ) : (
+                <div className="px-3 py-8 text-center">
+                  <FolderOpen className="mx-auto mb-2 h-8 w-8 text-gray-700" />
+                  <p className="text-sm text-gray-500">
+                    {pathname === projectBackHref ? 'Management overview' : 'Select a project'}
+                  </p>
+                  <p className="mt-0.5 text-xs text-gray-600">プロジェクトを選択</p>
+                </div>
+              )}
+            </div>
+          </>
         )}
       </nav>
 

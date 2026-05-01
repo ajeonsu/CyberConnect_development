@@ -1,18 +1,35 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { Project, SheetRow, UserProfile } from '@/types';
-import { FolderOpen, CheckCircle, Clock, Pause, Users, ListChecks, AlertTriangle, Plus, X, ChevronDown, BarChart3, Sparkles, Loader, Info, Pencil } from 'lucide-react';
-import { getUserName, translate, type Language } from '@/lib/data';
+import {
+  FolderOpen,
+  CheckCircle,
+  Clock,
+  Pause,
+  Users,
+  ListChecks,
+  AlertTriangle,
+  X,
+  ChevronDown,
+  BarChart3,
+  Sparkles,
+  Loader,
+  Info,
+  Pencil,
+  ArrowRight,
+} from 'lucide-react';
+import { getUserName, translate, type Language, userCanEditTeamProjectContent } from '@/lib/data';
 import { useWorkspace } from '@/components/WorkspaceProvider';
-import { DashboardLanguageToggle } from '@/components/dashboard/DashboardLanguageToggle';
 import type { GlobalTaskStats } from '@/lib/dal/stats';
 
-import { NewProjectModal } from '@/components/NewProjectModal';
 import { DeleteConfirmModal } from '@/components/DeleteConfirmModal';
 import { EditProjectModal } from '@/components/EditProjectModal';
 
 interface Props {
+  /** URL slug for permission helpers. */
+  teamSlug: string;
   projects: Project[];
   getSheetData: (projectId: string, sheetId: string) => SheetRow[];
+  /** Navigate into the project workspace (sheets). */
   onSelectProject: (projectId: string) => void;
   onUpdateProject: (projectId: string, updates: Partial<Project>) => void;
   onAssignMember: (projectId: string, profileId: string, role: string) => Promise<void>;
@@ -36,6 +53,7 @@ const PROJECT_COLORS = [
 ];
 
 export function AdminView({
+  teamSlug,
   projects,
   getSheetData,
   onSelectProject,
@@ -48,8 +66,15 @@ export function AdminView({
   canAssignProjectRoles = true,
   canDeleteProject = () => true,
 }: Props) {
-  const { loggedInUser, teamPool, language, setLanguage, patchProjectLocal } = useWorkspace();
-  const [showNewProject, setShowNewProject] = useState(false);
+  const {
+    loggedInUser,
+    teamPool,
+    language,
+    patchProjectLocal,
+    teamMemberships,
+    selectedAdminProjectId,
+    setSelectedAdminProjectId,
+  } = useWorkspace();
   const [editingPm, setEditingPm] = useState<string | null>(null);
   const [editingDevs, setEditingDevs] = useState<string | null>(null);
   const [editingClient, setEditingClient] = useState<string | null>(null);
@@ -63,6 +88,19 @@ export function AdminView({
     const t = window.setTimeout(() => setToast(null), 3200);
     return () => window.clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    if (projects.length === 0) {
+      setSelectedAdminProjectId(null);
+      return;
+    }
+    if (!selectedAdminProjectId || !projects.some(p => p.id === selectedAdminProjectId)) {
+      setSelectedAdminProjectId(projects[0].id);
+    }
+  }, [projects, selectedAdminProjectId, setSelectedAdminProjectId]);
+
+  const selectedProject =
+    projects.find(p => p.id === selectedAdminProjectId) ?? null;
 
   // Step 3: Force Render in ProjectCard (UI Level)
   // Ensure that even if context pool is 0, the currently logged-in user is visible.
@@ -91,14 +129,6 @@ export function AdminView({
 
   const remainingSeats = 20 - occupiedSeats;
 
-  const pmGroups = new Map<string, Project[]>();
-  for (const p of projects) {
-    const pmName = getUserName(p.pm_id || '');
-    const list = pmGroups.get(pmName) ?? [];
-    list.push(p);
-    pmGroups.set(pmName, list);
-  }
-
   const getTaskStats = (projectId: string) => {
     const tasks = getSheetData(projectId, 'tasks');
     const total = tasks.length;
@@ -123,37 +153,23 @@ export function AdminView({
   const totalProgress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
   return (
-    <div className="flex-1 overflow-auto p-10 bg-surface-950/20">
-      <div className="max-w-7xl mx-auto animate-fade-in">
-        <div className="flex items-center justify-between mb-10 gap-4 flex-wrap">
-          <div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">{translate('Executive Dashboard', language)}</h1>
-            <div className="flex items-center gap-4 mt-2">
-              <p className="text-gray-500 flex items-center gap-2 text-sm">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                {translate('Global monitor', language)}
-              </p>
-              <div className="h-4 w-px bg-surface-800" />
-              <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-surface-900 border border-surface-800">
-                <Users className="w-3.5 h-3.5 text-brand-400" />
-                <span className={`text-[11px] font-bold ${remainingSeats <= 2 ? 'text-rose-400' : 'text-gray-300'}`}>
-                  {translate('Staff Seats', language)}: {occupiedSeats}/20
-                </span>
-                {remainingSeats <= 2 && (
-                  <span className="text-[10px] text-rose-500 font-medium animate-pulse">({translate('Near Limit', language)})</span>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <DashboardLanguageToggle language={language} onLanguageChange={setLanguage} />
-            <button
-              onClick={() => setShowNewProject(true)}
-              className="flex items-center gap-2 px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-brand-600/20 active:scale-95"
-            >
-              <Plus className="w-4 h-4" />
-              {translate('New Project', language)}
-            </button>
+    <div className="flex flex-1 min-h-0 flex-col overflow-hidden bg-surface-950/20">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="animate-fade-in mx-auto min-h-0 w-full max-w-7xl flex-1 overflow-y-auto px-6 py-8 lg:px-10">
+        <div className="flex flex-wrap items-center gap-4 mb-10">
+          <p className="text-gray-500 flex items-center gap-2 text-sm">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            {translate('Global monitor', language)}
+          </p>
+          <div className="h-4 w-px bg-surface-800 hidden sm:block" aria-hidden />
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-surface-900 border border-surface-800">
+            <Users className="w-3.5 h-3.5 text-brand-400" />
+            <span className={`text-[11px] font-bold ${remainingSeats <= 2 ? 'text-rose-400' : 'text-gray-300'}`}>
+              {translate('Staff Seats', language)}: {occupiedSeats}/20
+            </span>
+            {remainingSeats <= 2 && (
+              <span className="text-[10px] text-rose-500 font-medium animate-pulse">({translate('Near Limit', language)})</span>
+            )}
           </div>
         </div>
 
@@ -249,21 +265,26 @@ export function AdminView({
           </div>
         </div>
 
-        {Array.from(pmGroups.entries()).map(([pmName, pmProjects]) => (
-          <div key={pmName} className="mb-12">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-xl bg-surface-900 border border-surface-800 flex items-center justify-center shadow-sm">
-                <Users className="w-5 h-5 text-brand-400" />
-              </div>
+        {selectedProject ? (
+          <div className="mb-12">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <div>
-                <h2 className="text-xl font-bold text-white">{pmName || 'Unassigned'}</h2>
-                <p className="text-xs text-gray-500 uppercase tracking-widest font-bold">{pmProjects.length} {translate('Managed Projects', language)}</p>
+                <h2 className="text-xl font-bold text-white">{translate('Project overview', language)}</h2>
+                <p className="text-xs text-gray-500 mt-1">{selectedProject.client || 'TBD'}</p>
               </div>
-              <div className="ml-auto h-px bg-surface-800 flex-1 ml-6 opacity-30" />
+              <button
+                type="button"
+                onClick={() => onSelectProject(selectedProject.id)}
+                className="inline-flex items-center gap-2 rounded-xl border border-brand-500/35 bg-brand-600/10 px-4 py-2 text-sm font-semibold text-brand-300 transition-colors hover:bg-brand-600/20"
+              >
+                {language === 'ja' ? 'ワークスペースを開く' : 'Open workspace'}
+                <ArrowRight className="h-4 w-4" />
+              </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {pmProjects.map(project => {
+            <div className="max-w-3xl">
+              {(() => {
+                const project = selectedProject;
                 const stats = getTaskStats(project.id);
                 const progress = stats.total > 0 ? Math.round((stats.done / stats.total) * 100) : 0;
                 const StatusIcon = project.status === 'active' ? CheckCircle : project.status === 'on_hold' ? Pause : Clock;
@@ -501,18 +522,15 @@ export function AdminView({
                     </div>
                   </div>
                 );
-              })}
+              })()}
             </div>
           </div>
-        ))}
-
-        {showNewProject && (
-          <NewProjectModal
-            onClose={() => setShowNewProject(false)}
-            onAdd={onAddProject}
-          />
+        ) : (
+          <div className="mb-12 rounded-2xl border border-dashed border-surface-700 p-12 text-center text-sm text-gray-500">
+            {language === 'ja' ? 'サイドバーのリストからプロジェクトを選択してください' : 'Select a project from the sidebar list'}
+          </div>
         )}
-        
+
         {inviteFor && (
           <InviteModal
             initialRole={inviteFor.role}
@@ -556,6 +574,7 @@ export function AdminView({
             {toast}
           </div>
         )}
+        </div>
       </div>
     </div>
   );

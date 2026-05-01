@@ -58,6 +58,7 @@ export default function AdminDashboardClient({ teamSlug, serverStats, initialPro
 
   return (
     <AdminView
+      teamSlug={teamSlug}
       projects={displayProjects}
       getSheetData={getSheetData}
       onSelectProject={handleSelectProject}
