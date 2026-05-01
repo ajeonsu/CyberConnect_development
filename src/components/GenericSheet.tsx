@@ -115,8 +115,6 @@ export function GenericSheet({
       if (pm) return true;
       if (projectSheetRole === 'dev') {
         const c = tab.columns.find(c => c.key === colKey);
-        // User hint: "assigning developer cell is not accessible to dev only pm and the admin"
-        if (c?.type === 'assignee') return false; 
         return c?.editable ?? false;
       }
       return false;
@@ -334,7 +332,9 @@ export function GenericSheet({
                             onChange={e => setEditValue(e.target.value)}
                             onBlur={commitEdit}
                             onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditingCell(null); }}
-                            className="w-full bg-surface-800 border border-brand-500 rounded px-2 py-1 text-sm text-white focus:outline-none"
+                            className={`w-full rounded border border-brand-500 bg-surface-800 px-2 py-1 text-sm text-white focus:outline-none ${
+                              sourceCol.type === 'code' ? 'font-mono text-brand-300' : ''
+                            }`}
                             onClick={e => e.stopPropagation()}
                           />
                         )

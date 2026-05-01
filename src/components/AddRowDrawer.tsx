@@ -57,7 +57,6 @@ export function AddRowDrawer({ tab, projectId, project, projectSheetRole, langua
     if (projectSheetRole === 'pm') return true;
     if (projectSheetRole === 'dev' && isTasksTab(tab.id)) {
       const c = tab.columns.find(c => c.key === colKey);
-      if (c?.type === 'assignee') return false;
       return c?.editable ?? false;
     }
     return false;

@@ -369,7 +369,7 @@ export const sheetTabs: SheetTab[] = [
     icon: 'CheckSquare',
     visibleTo: ['admin', 'pm', 'dev', 'client'],
     columns: [
-      col('task_code', 'Code', 'タスクID', 100, 'code', false),
+      col('task_code', 'Code', 'タスクID', 100, 'code', true),
       col('phase', 'Phase', 'フェーズ', 100, 'select', true, ['MVP', 'v2', 'v3']),
       col('sprint', 'Sprint', 'スプリント', 100, 'text', true),
       col('epic', 'Epic', 'エピック', 140, 'text', true),

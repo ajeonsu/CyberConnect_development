@@ -64,8 +64,6 @@ export function SheetRowDetail({
     if (projectSheetRole === 'pm') return true;
     if (projectSheetRole === 'dev' && isTasksTab(tab.id)) {
       const c = tab.columns.find(c => c.key === colKey);
-      // Assignee is read-only for developers
-      if (c?.type === 'assignee') return false;
       return c?.editable ?? false;
     }
     return false;
@@ -172,6 +170,15 @@ export function SheetRowDetail({
                     }
                     rows={4}
                     className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-brand-500/40 resize-none"
+                  />
+                ) : editable && col.type === 'code' ? (
+                  <input
+                    type="text"
+                    value={value}
+                    onChange={e =>
+                      setFormData(prev => ({ ...prev, [col.key]: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-surface-700 bg-surface-800 px-3 py-2 font-mono text-sm text-brand-300 focus:outline-none focus:ring-2 focus:ring-brand-500/40"
                   />
                 ) : editable && col.type !== 'code' ? (
                   <input
