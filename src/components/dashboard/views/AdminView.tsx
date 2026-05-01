@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { Project, SheetRow, UserProfile } from '@/types';
-import { FolderOpen, CheckCircle, Clock, Pause, Users, ListChecks, AlertTriangle, Plus, X, ChevronDown, BarChart3, Sparkles, Loader, Info } from 'lucide-react';
+import { FolderOpen, CheckCircle, Clock, Pause, Users, ListChecks, AlertTriangle, Plus, X, ChevronDown, BarChart3, Sparkles, Loader, Info, Pencil } from 'lucide-react';
 import { getUserName, translate, type Language } from '@/lib/data';
 import { useWorkspace } from '@/components/WorkspaceProvider';
 import { DashboardLanguageToggle } from '@/components/dashboard/DashboardLanguageToggle';
@@ -8,6 +8,7 @@ import type { GlobalTaskStats } from '@/lib/dal/stats';
 
 import { NewProjectModal } from '@/components/NewProjectModal';
 import { DeleteConfirmModal } from '@/components/DeleteConfirmModal';
+import { EditProjectModal } from '@/components/EditProjectModal';
 
 interface Props {
   projects: Project[];
@@ -47,13 +48,21 @@ export function AdminView({
   canAssignProjectRoles = true,
   canDeleteProject = () => true,
 }: Props) {
-  const { loggedInUser, teamPool, language, setLanguage } = useWorkspace();
+  const { loggedInUser, teamPool, language, setLanguage, patchProjectLocal } = useWorkspace();
   const [showNewProject, setShowNewProject] = useState(false);
   const [editingPm, setEditingPm] = useState<string | null>(null);
   const [editingDevs, setEditingDevs] = useState<string | null>(null);
   const [editingClient, setEditingClient] = useState<string | null>(null);
   const [inviteFor, setInviteFor] = useState<{ projectId: string; role: 'pm' | 'developer' | 'client' } | null>(null);
   const [showDeleteConfirmFor, setShowDeleteConfirmFor] = useState<string | null>(null);
+  const [editProject, setEditProject] = useState<Project | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [toast]);
 
   // Step 3: Force Render in ProjectCard (UI Level)
   // Ensure that even if context pool is 0, the currently logged-in user is visible.
@@ -454,9 +463,18 @@ export function AdminView({
                           )}
                         </div>
 
-                        <div className="flex items-center justify-end gap-2 pt-2">
+                        <div className="flex items-center justify-end gap-2 pt-2 flex-wrap">
                           {canAssignProjectRoles && (
                             <>
+                              <button
+                                type="button"
+                                onClick={() => setEditProject(project)}
+                                className="inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-brand-400 hover:text-brand-300 transition-colors"
+                              >
+                                <Pencil className="w-3 h-3" aria-hidden />
+                                Edit
+                              </button>
+                              <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" aria-hidden />
                               <button
                                 type="button"
                                 onClick={() => setInviteFor({ projectId: project.id, role: 'pm' })}
@@ -465,7 +483,7 @@ export function AdminView({
                                 {translate('Invite', language)}
                               </button>
                               {canDeleteProject(project) && (
-                                <div className="w-1 h-1 rounded-full bg-surface-700" />
+                                <span className="w-1 h-1 rounded-full bg-surface-700 shrink-0" aria-hidden />
                               )}
                             </>
                           )}
@@ -519,6 +537,24 @@ export function AdminView({
               setShowDeleteConfirmFor(null);
             }}
           />
+        )}
+
+        {editProject && (
+          <EditProjectModal
+            project={editProject}
+            onClose={() => setEditProject(null)}
+            onSaved={updates => patchProjectLocal(editProject.id, updates)}
+            onNotify={msg => setToast(msg)}
+          />
+        )}
+
+        {toast && (
+          <div
+            className="fixed bottom-6 left-1/2 z-[70] -translate-x-1/2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm shadow-lg border border-emerald-500/30"
+            role="status"
+          >
+            {toast}
+          </div>
         )}
       </div>
     </div>

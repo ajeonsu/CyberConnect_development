@@ -31,6 +31,8 @@ interface WorkspaceContextType {
   setLanguage: (lang: Language) => void;
   handleLogout: () => Promise<void>;
   handleUpdateProject: (id: string, updates: Partial<Project>) => Promise<void>;
+  /** Merge project fields in client state only (no server call). Use after a dedicated server action succeeded. */
+  patchProjectLocal: (id: string, updates: Partial<Project>) => void;
   handleAssignMember: (projectId: string, profileId: string, role: string) => Promise<void>;
   handleRemoveMember: (projectId: string, profileId: string) => Promise<void>;
   handleDeleteProject: (id: string) => Promise<void>;
@@ -352,6 +354,10 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     setProjects(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
   }, []);
 
+  const patchProjectLocal = useCallback((id: string, updates: Partial<Project>) => {
+    setProjects(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
+  }, []);
+
   const resolveTeamSlugForRefresh = useCallback(() => {
     if (pathname.startsWith('/personal')) return undefined;
     const segments = pathname.split('/').filter(Boolean);
@@ -574,6 +580,7 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     setLanguage,
     handleLogout,
     handleUpdateProject,
+    patchProjectLocal,
     handleAssignMember,
     handleRemoveMember,
     handleDeleteProject,

@@ -12,6 +12,13 @@ import {
   canDeleteTeamProject,
 } from '@/lib/team-project-auth'
 
+export type TeamProjectCoreDetailsInput = {
+  name: string;
+  name_ja: string;
+  client: string;
+  description: string;
+}
+
 /**
  * Server-side actions for managing Projects.
  * These actions enforce ownership and workspace isolation.
@@ -355,6 +362,63 @@ export async function updateProjectAction(id: string, updates: Partial<Project>)
 
   if (error) throw error
   revalidatePath('/')
+}
+
+/**
+ * Updates core listing fields for a team project. Restricted to company admin, billing owner,
+ * or platform admin — same bar as role assignment (must not rely on UI-only checks).
+ */
+export async function updateTeamProjectCoreDetailsAction(
+  projectId: string,
+  input: TeamProjectCoreDetailsInput
+): Promise<{ success: boolean; error?: string; data?: Partial<Project> }> {
+  const session = await getSession()
+  if (!session) return { success: false, error: 'Unauthorized' }
+
+  const supabase = await createClient()
+  const profile = await getProfileByEmail(supabase, session.email)
+  if (!profile) return { success: false, error: 'Unauthorized' }
+
+  const name = input.name.trim()
+  if (!name) return { success: false, error: 'Project name is required' }
+
+  const { data: existing, error: fetchErr } = await supabase
+    .from('projects')
+    .select('id, workspace_type, team_id, pm_id')
+    .eq('id', projectId)
+    .single()
+
+  if (fetchErr || !existing) return { success: false, error: 'Project not found' }
+  if (existing.workspace_type !== 'team') return { success: false, error: 'Invalid project' }
+
+  const priv = await resolveTeamProjectPrivilege(supabase, profile.id, {
+    id: projectId,
+    team_id: existing.team_id,
+    workspace_type: existing.workspace_type,
+    pm_id: existing.pm_id,
+  })
+  if (!canManageProjectRoles(priv)) {
+    return { success: false, error: 'Forbidden: Only a company admin or the billing owner can edit project details' }
+  }
+
+  const payload = {
+    name,
+    name_ja: input.name_ja.trim() || name,
+    client: input.client.trim(),
+    description: input.description.trim(),
+  }
+
+  const { data: updated, error } = await supabase
+    .from('projects')
+    .update(payload)
+    .eq('id', projectId)
+    .select()
+    .single()
+
+  if (error) return { success: false, error: error.message }
+
+  revalidatePath('/', 'layout')
+  return { success: true, data: updated as Partial<Project> }
 }
 
 export async function deleteProjectAction(id: string) {
