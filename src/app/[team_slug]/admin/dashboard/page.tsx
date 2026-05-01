@@ -19,9 +19,7 @@ export default async function AdminDashboardPage(props: { params: Promise<{ team
 
   // Passes that specific team_id into the getProjectsAction.
   // If fetching for a Team, the query MUST include .eq('workspace_type', 'team').eq('team_id', requested_team_id).
-  const initialProjects = teamId
-    ? await getProjectsAction('team', teamId, undefined, { bypassProjectRoleFilter: true })
-    : [];
+  const initialProjects = teamId ? await getProjectsAction('team', teamId) : [];
 
   const stats = await getGlobalTaskStats(teamId);
 

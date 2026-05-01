@@ -72,10 +72,10 @@ export function PersonalView({ projects, getTaskStats, onSelectProject, onAddPro
       return;
     }
 
-    await updateActiveRoleAction('pm', res.teamSlug);
+    await updateActiveRoleAction('admin', res.teamSlug);
     setShowJoinModal(false);
     setJoinCode('');
-    router.push(`/switch-role?team=${encodeURIComponent(res.teamSlug)}`);
+    router.push(`/${res.teamSlug}/admin/dashboard`);
     router.refresh();
   };
 

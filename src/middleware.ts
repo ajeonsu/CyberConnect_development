@@ -88,7 +88,7 @@ export async function middleware(request: NextRequest) {
         return NextResponse.redirect(new URL('/personal/dashboard', request.url))
       }
       if (activeTeamSlug) {
-        const role = activeRole || 'pm'
+        const role = activeRole || 'admin'
         return NextResponse.redirect(new URL(`/${activeTeamSlug}/${role}/dashboard`, request.url))
       } else {
         return NextResponse.redirect(new URL('/select-workspace', request.url))
@@ -124,12 +124,23 @@ export async function middleware(request: NextRequest) {
         const roles = ['admin', 'pm', 'dev', 'client']
 
         if (roles.includes(urlRole)) {
-          // Strict multi-tenant validation
-          if (urlRole !== role || teamSlug !== activeTeamSlug) {
-             return NextResponse.redirect(new URL(`/${activeTeamSlug}/${role}/dashboard`, request.url))
+          // Legacy URLs: global PM/Dev/Client perspectives are removed — normalize to /admin/ routes.
+          if (urlRole === 'pm' || urlRole === 'dev' || urlRole === 'client') {
+            const tail = pathSegments.slice(2).join('/')
+            const targetPath = tail ? `/${teamSlug}/admin/${tail}` : `/${teamSlug}/admin/dashboard`
+            return NextResponse.redirect(new URL(targetPath, request.url))
           }
-          
-          // Protection: Prevent non-admins from accessing Admin URLs
+
+          // Strict multi-tenant validation (team URLs always use /admin/...; legacy pm/dev/client cookies still match until the client syncs cookies)
+          const legacyWorkspaceCookies = ['pm', 'dev', 'client']
+          const workspaceAligned =
+            urlRole === role ||
+            (urlRole === 'admin' && legacyWorkspaceCookies.includes(role || '') && teamSlug === activeTeamSlug)
+          if (!workspaceAligned || teamSlug !== activeTeamSlug) {
+            return NextResponse.redirect(new URL(`/${activeTeamSlug}/${role}/dashboard`, request.url))
+          }
+
+          // Team "/admin/*" routes are the shared team workspace; any member of the company may access them.
           if (urlRole === 'admin') {
             const { data: teamRow, error: teamErr } = await supabase
               .from('teams')
@@ -141,7 +152,6 @@ export async function middleware(request: NextRequest) {
               return NextResponse.redirect(new URL(`/${activeTeamSlug}/${role}/dashboard`, request.url))
             }
 
-            // team_members.profile_id references public.profiles.id (not always auth.users.id)
             let profileId = user.id
             const appEmail = request.cookies.get('cyberconnect_email')?.value
             if (appEmail) {
@@ -160,8 +170,8 @@ export async function middleware(request: NextRequest) {
               .eq('team_id', teamRow.id)
               .maybeSingle()
 
-            if (membership?.role !== 'admin') {
-              return NextResponse.redirect(new URL(`/${activeTeamSlug}/${role}/dashboard`, request.url))
+            if (!membership) {
+              return NextResponse.redirect(new URL('/select-workspace', request.url))
             }
           }
         }

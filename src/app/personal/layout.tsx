@@ -28,9 +28,14 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
   } = useWorkspace();
   const personalTeamSlug = loggedInUser?.activeTeamSlug || teamMemberships[0]?.team?.slug || 'my-team';
 
-  const handleSwitchTeam = useCallback((slug: string) => {
-    router.push(`/switch-role?team=${slug}`);
-  }, [router]);
+  const handleSwitchTeam = useCallback(
+    async (slug: string) => {
+      await updateActiveRoleAction('admin', slug);
+      router.push(`/${slug}/admin/dashboard`);
+      router.refresh();
+    },
+    [router]
+  );
 
   const activeProjectId = params.id as string | undefined;
   const activeTabId = params.tabId as string | undefined;
@@ -67,8 +72,11 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
         workspaceScope="personal"
         teamMemberships={teamMemberships}
         onSwitchTeam={handleSwitchTeam}
-        onWorkspaceScopeChange={(scope) => {
-          if (scope === 'team') router.push(`/switch-role?team=${personalTeamSlug}`);
+        onWorkspaceScopeChange={async (scope) => {
+          if (scope !== 'team') return;
+          await updateActiveRoleAction('admin', personalTeamSlug);
+          router.push(`/${personalTeamSlug}/admin/dashboard`);
+          router.refresh();
         }}
         onLogout={handleLogout}
         activeProject={activeProject}

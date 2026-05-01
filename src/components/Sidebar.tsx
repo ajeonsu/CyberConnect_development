@@ -8,9 +8,8 @@ import {
   ChevronLeft, ChevronRight, LogOut, FolderOpen, ArrowLeft, BarChart3,
   FileText, Server, ShieldCheck, Monitor, Puzzle, CheckSquare,
   FlaskConical, Plug, ListTodo, GanttChart, Calendar, Building2, UserRound,
-  UserCog, ChevronDown, Check,
+  ChevronDown, Check,
 } from 'lucide-react';
-import { clearLoginSessionStorage, setResumeRoleSelection } from '@/lib/loginSession';
 import { getLocalizedProjectName, getLocalizedTabName, type Language } from '@/lib/data';
 import { WorkspaceInfoModal } from '@/components/WorkspaceInfoModal';
 
@@ -50,14 +49,6 @@ const roleColors: Record<string, string> = {
   personal: 'bg-indigo-600',
 };
 
-const roleLabels: Record<string, string> = {
-  admin: 'Administrator',
-  pm: 'Project Manager',
-  dev: 'Developer',
-  client: 'Client / Guest',
-  personal: 'Personal',
-};
-
 export function Sidebar({
   role,
   user,
@@ -88,17 +79,28 @@ export function Sidebar({
   const activeScope: WorkspaceScope = pathname.startsWith('/personal') ? 'personal' : 'team';
   
   const activeRole = user.activeWorkspaceRole || role;
-  /** Path segment for this layout (must match URL); do not use cookie alone or links break under /dev vs /pm. */
+  /** Path segment for this layout (must match URL). */
   const routeRole = role;
-  const roleLine = roleLabels[activeRole] || 'Member';
 
-  // Find current team name robustly
   const currentTeam = teamMemberships.find(m => m.team?.slug === user.activeTeamSlug)?.team 
     || teamMemberships[0]?.team;
   const currentTeamMembership = teamMemberships.find(m => m.team?.slug === user.activeTeamSlug)
     || teamMemberships.find(m => m.team?.slug === currentTeam?.slug);
   const currentTeamName = currentTeam?.name || 'Main Team';
   const currentTeamSlug = currentTeam?.slug || user.activeTeamSlug || 'my-team';
+
+  const pathTeamSlug = !pathname.startsWith('/personal') ? pathname.split('/').filter(Boolean)[0] : undefined;
+  const membershipForSlug =
+    teamMemberships.find(m => m.team?.slug === user.activeTeamSlug) ||
+    teamMemberships.find(m => m.team?.slug === pathTeamSlug);
+  const roleLine =
+    activeScope === 'personal'
+      ? 'Personal'
+      : membershipForSlug?.team?.owner_id === user.id
+        ? 'Owner'
+        : membershipForSlug?.role === 'admin'
+          ? 'Company Admin'
+          : 'Team member';
   const canSeeInviteCode = activeScope === 'team' && currentTeamMembership?.role === 'admin';
 
   // Handle outside click for dropdown
@@ -111,12 +113,6 @@ export function Sidebar({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const handleSwitchRole = () => {
-    setResumeRoleSelection();
-    // Redirect to dedicated switch-role page with context
-    router.push(`/switch-role?team=${currentTeamSlug}`);
-  };
 
   const handleSelectTeam = (slug: string) => {
     setShowWorkspaceDropdown(false);
@@ -309,19 +305,6 @@ export function Sidebar({
       </nav>
 
       <div className="p-2 border-t border-surface-700 space-y-0.5">
-        {activeScope === 'team' && user.accountKind === 'team' && (
-          <button
-            type="button"
-            onClick={handleSwitchRole}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-500 hover:text-brand-300 hover:bg-brand-500/5 transition-colors"
-          >
-            <UserCog className="w-4 h-4 shrink-0" />
-            <span className="text-xs text-left leading-tight">
-              Switch role
-              <span className="block text-[10px] text-gray-600 font-normal">ロールを変更</span>
-            </span>
-          </button>
-        )}
         <button
           type="button"
           onClick={onLogout}

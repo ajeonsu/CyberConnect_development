@@ -10,10 +10,6 @@ import { getSheetRowsAction, upsertSheetRowAction, deleteSheetRowAction } from '
 import {
   setCachedProfiles,
   sheetTabs,
-  userSeesProjectAsTeamMember,
-  userSeesProjectAsPm,
-  userSeesProjectAsDev,
-  userSeesProjectAsClient,
   type Language,
 } from '@/lib/data';
 import type { UserProfile, Project, SheetRow, UserRole, TeamMembership } from '@/types';
@@ -145,14 +141,7 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
         const scope = pathname.startsWith('/personal') ? 'personal' : 'team';
         const segments = pathname.split('/').filter(Boolean);
         const teamSlug = scope === 'team' ? (params.team_slug as string || segments[0]) : undefined;
-        const bypassProjectFilter = pathname.includes('/admin/dashboard');
-
-        getProjectsAction(
-          scope,
-          undefined,
-          teamSlug,
-          bypassProjectFilter ? { bypassProjectRoleFilter: true } : undefined
-        ).then(async res => {
+        getProjectsAction(scope, undefined, teamSlug).then(async res => {
           setProjects(res);
           setIsLoading(false);
 
@@ -210,13 +199,7 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
       setTeamMemberships(memRes);
       setCachedProfiles(profilesList);
 
-      const bypassProjectFilter = pathname.includes('/admin/dashboard');
-      const projs = await getProjectsAction(
-        'team',
-        undefined,
-        teamSlug,
-        bypassProjectFilter ? { bypassProjectRoleFilter: true } : undefined
-      );
+      const projs = await getProjectsAction('team', undefined, teamSlug);
       setProjects(projs);
 
       let teamId = projs.find(p => p.team_id)?.team_id;
@@ -379,12 +362,10 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     const { assignProjectMemberAction } = await import('@/actions/projects');
     await assignProjectMemberAction(projectId, profileId, role);
     const slug = resolveTeamSlugForRefresh();
-    const bypass = pathname.includes('/admin/dashboard');
-    const teamOpts = bypass ? { bypassProjectRoleFilter: true as const } : undefined;
     if (pathname.startsWith('/personal')) {
       getProjectsAction('personal').then(res => setProjects(res));
     } else {
-      getProjectsAction('team', undefined, slug, teamOpts).then(res => setProjects(res));
+      getProjectsAction('team', undefined, slug).then(res => setProjects(res));
     }
   }, [pathname, resolveTeamSlugForRefresh]);
 
@@ -392,12 +373,10 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     const { removeProjectMemberAction } = await import('@/actions/projects');
     await removeProjectMemberAction(projectId, profileId);
     const slug = resolveTeamSlugForRefresh();
-    const bypass = pathname.includes('/admin/dashboard');
-    const teamOpts = bypass ? { bypassProjectRoleFilter: true as const } : undefined;
     if (pathname.startsWith('/personal')) {
       getProjectsAction('personal').then(res => setProjects(res));
     } else {
-      getProjectsAction('team', undefined, slug, teamOpts).then(res => setProjects(res));
+      getProjectsAction('team', undefined, slug).then(res => setProjects(res));
     }
   }, [pathname, resolveTeamSlugForRefresh]);
 
@@ -545,50 +524,10 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
   const visibleProjects = useMemo(() => {
     if (!loggedInUser) return [];
     if (workspaceScope === 'team') {
-      const teamProjects = projects.filter(p => p.workspace_type === 'team');
-      const segments = pathname.split('/').filter(Boolean);
-      const pathSlug = segments[0];
-      const roleFromPath = segments[1];
-      const urlWorkspaceRole =
-        roleFromPath === 'admin' || roleFromPath === 'pm' || roleFromPath === 'dev' || roleFromPath === 'client'
-          ? roleFromPath
-          : undefined;
-
-      const isCompanyAdminForUrlTeam =
-        !!pathSlug &&
-        teamMemberships.some(
-          m =>
-            m.team?.slug === pathSlug &&
-            m.role === 'admin' &&
-            m.profile_id === loggedInUser.id
-        );
-
-      const effectiveWorkspaceRole =
-        urlWorkspaceRole ||
-        (loggedInUser.activeWorkspaceRole as string | undefined) ||
-        loggedInUser.role ||
-        'pm';
-
-      const actingAsTeamAdmin =
-        (loggedInUser.role === 'admin' && effectiveWorkspaceRole === 'admin') ||
-        (isCompanyAdminForUrlTeam && effectiveWorkspaceRole === 'admin');
-
-      if (actingAsTeamAdmin) return teamProjects;
-
-      if (effectiveWorkspaceRole === 'pm') {
-        return teamProjects.filter(p => userSeesProjectAsPm(loggedInUser.id, p));
-      }
-      if (effectiveWorkspaceRole === 'dev') {
-        return teamProjects.filter(p => userSeesProjectAsDev(loggedInUser.id, p));
-      }
-      if (effectiveWorkspaceRole === 'client') {
-        return teamProjects.filter(p => userSeesProjectAsClient(loggedInUser.id, p));
-      }
-
-      return teamProjects.filter(p => userSeesProjectAsTeamMember(loggedInUser.id, p));
+      return projects.filter(p => p.workspace_type === 'team');
     }
     return projects.filter(p => p.workspace_type === 'personal');
-  }, [loggedInUser, projects, workspaceScope, pathname, teamMemberships]);
+  }, [loggedInUser, projects, workspaceScope]);
 
   const handleSetWorkspaceScope = useCallback(async (scope: 'team' | 'personal') => {
     const { updateActiveRoleAction } = await import('@/actions/auth');
@@ -605,12 +544,13 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
       setWorkspaceScope('personal');
       router.push('/personal/dashboard');
     } else {
-      const role = loggedInUser?.role || 'pm';
       const slug = loggedInUser?.activeTeamSlug || 'my-team';
-      await updateActiveRoleAction(role, slug);
-      setLoggedInUser(prev => prev ? { ...prev, activeWorkspaceRole: role } : null);
+      await updateActiveRoleAction('admin', slug);
+      setLoggedInUser(prev =>
+        prev ? { ...prev, activeWorkspaceRole: 'admin', activeTeamSlug: slug } : null
+      );
       setWorkspaceScope('team');
-      router.push(`/${slug}/${role}/dashboard`);
+      router.push(`/${slug}/admin/dashboard`);
     }
     router.refresh();
   }, [loggedInUser, router]);

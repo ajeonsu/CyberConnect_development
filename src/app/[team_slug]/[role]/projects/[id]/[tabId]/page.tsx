@@ -7,9 +7,9 @@ import { GenericSheet } from '@/components/GenericSheet';
 import { SheetRowDetail } from '@/components/SheetRowDetail';
 import { AddRowDrawer } from '@/components/AddRowDrawer';
 import { ExportModal } from '@/components/ExportModal';
-import { sheetTabs, getCurrentUserProjectSheetRole, getLocalizedProjectName } from '@/lib/data';
+import { sheetTabs, getCurrentUserProjectSheetRole, getLocalizedProjectName, isTeamAdminOrOwner } from '@/lib/data';
 import { useMemo, useEffect, useState } from 'react';
-import type { SheetRow, UserRole } from '@/types';
+import type { SheetRow } from '@/types';
 
 export default function ProjectTabPage() {
   const params = useParams();
@@ -21,14 +21,14 @@ export default function ProjectTabPage() {
     language,
     setLanguage,
     sheetLoadingProjects,
-    workspaceScope, 
     refreshSheetData,
     getProjectById,
     refreshProject,
     updateSheetRow,
     updateSheetRowData,
     addSheetRow,
-    deleteSheetRow
+    deleteSheetRow,
+    teamMemberships,
   } = useWorkspace();
 
   const projectId = params.id as string;
@@ -55,16 +55,20 @@ export default function ProjectTabPage() {
   const activeProject = useMemo(() => getProjectById(projectId), [getProjectById, projectId]);
   const activeTab = useMemo(() => sheetTabs.find(t => t.id === tabId), [tabId]);
 
-  const platformRoleFromUrl: UserRole = useMemo(() => {
-    const roleParam = params.role as string;
-    if (roleParam === 'admin') return 'admin';
-    if (roleParam === 'dev') return 'dev';
-    return (roleParam as UserRole) || 'pm';
-  }, [params.role]);
+  const teamSlug = params.team_slug as string | undefined;
+
+  const teamAdminOrOwner = useMemo(
+    () => isTeamAdminOrOwner(loggedInUser?.id, teamSlug, teamMemberships),
+    [loggedInUser?.id, teamSlug, teamMemberships]
+  );
 
   const projectSheetRole = useMemo(
-    () => getCurrentUserProjectSheetRole(loggedInUser?.id, activeProject, platformRoleFromUrl),
-    [loggedInUser?.id, activeProject, platformRoleFromUrl]
+    () =>
+      getCurrentUserProjectSheetRole(loggedInUser?.id, activeProject, 'client', {
+        isTeamAdminOrOwner: teamAdminOrOwner,
+        profileRole: loggedInUser?.role,
+      }),
+    [loggedInUser?.id, activeProject, teamAdminOrOwner, loggedInUser?.role]
   );
 
   const currentRows = useMemo(() => {

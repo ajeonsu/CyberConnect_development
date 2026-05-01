@@ -5,6 +5,12 @@ import { getSession } from './auth'
 import { Project } from '@/types'
 import { revalidatePath } from 'next/cache'
 import { SupabaseClient } from '@supabase/supabase-js'
+import {
+  resolveTeamProjectPrivilege,
+  canManageProjectRoles,
+  canUpdateTeamProjectMetadata,
+  canDeleteTeamProject,
+} from '@/lib/team-project-auth'
 
 /**
  * Server-side actions for managing Projects.
@@ -48,7 +54,7 @@ export async function getProjectsAction(
   workspaceType?: 'personal' | 'team',
   teamId?: string,
   teamSlug?: string,
-  options?: GetProjectsOptions
+  _options?: GetProjectsOptions
 ): Promise<Project[]> {
   const session = await getSession()
   if (!session) return []
@@ -79,46 +85,8 @@ export async function getProjectsAction(
       .is('team_id', null)
       .eq('owner_id', profile.id);
   } else if (targetType === 'team' && targetTeamId) {
-    // TEAM SCOPE: Must filter by the specific team ID
-    query = query.eq('workspace_type', 'team')
-      .eq('team_id', targetTeamId);
-
-    // Full team list: explicit bypass (admin dashboard) OR acting as admin workspace role.
-    // Do not use session.role (platform admin) alone — when admin switches to pm/dev/client they must
-    // see only projects they hold that assignment on.
-    let skipMemberFilter = options?.bypassProjectRoleFilter === true || activeRole === 'admin';
-    if (!skipMemberFilter) {
-      const { data: teamRow } = await supabase
-        .from('team_members')
-        .select('role')
-        .eq('team_id', targetTeamId)
-        .eq('profile_id', profile.id)
-        .maybeSingle();
-      skipMemberFilter = teamRow?.role === 'admin' && activeRole === 'admin';
-    }
-
-    if (!skipMemberFilter) {
-      // Scenario B: Role-Based Filter (PM, Dev, Client) for THIS specific company
-      const dbRole = activeRole === 'dev' ? 'dev' : activeRole;
-      
-      const { data: memberEntries } = await supabase.from('project_members')
-        .select('project_id')
-        .eq('profile_id', profile.id)
-        .eq('workspace_role', dbRole);
-      
-      const assignedProjectIds = (memberEntries || []).map(m => m.project_id);
-
-      if (activeRole === 'pm') {
-        const filterParts = [`pm_id.eq.${profile.id}`];
-        if (assignedProjectIds.length > 0) {
-          filterParts.push(`id.in.(${assignedProjectIds.join(',')})`);
-        }
-        query = query.or(filterParts.join(','));
-      } else {
-        if (assignedProjectIds.length === 0) return [];
-        query = query.in('id', assignedProjectIds);
-      }
-    }
+    // TEAM SCOPE: Every member sees all team projects; sheet edit rights are enforced per project.
+    query = query.eq('workspace_type', 'team').eq('team_id', targetTeamId);
   } else {
     // No valid context found
     return [];
@@ -178,7 +146,19 @@ export async function assignProjectMemberAction(projectId: string, profileId: st
   if (!session) throw new Error('Unauthorized')
 
   const supabase = await createClient()
-  
+  const actor = await getProfileByEmail(supabase, session.email)
+  if (!actor) throw new Error('Unauthorized')
+
+  const { data: projectRow } = await supabase
+    .from('projects')
+    .select('id, team_id, workspace_type, pm_id')
+    .eq('id', projectId)
+    .single()
+  if (!projectRow || projectRow.workspace_type !== 'team') throw new Error('Invalid project')
+
+  const priv = await resolveTeamProjectPrivilege(supabase, actor.id, projectRow)
+  if (!canManageProjectRoles(priv)) throw new Error('Forbidden: Only company admins or the billing owner can assign project roles')
+
   // Mapping 'dev' UI role to 'dev' SQL ENUM
   const dbRole = role === 'dev' ? 'dev' : role;
 
@@ -206,7 +186,19 @@ export async function removeProjectMemberAction(projectId: string, profileId: st
   if (!session) throw new Error('Unauthorized')
 
   const supabase = await createClient()
-  
+  const actor = await getProfileByEmail(supabase, session.email)
+  if (!actor) throw new Error('Unauthorized')
+
+  const { data: projectRow } = await supabase
+    .from('projects')
+    .select('id, team_id, workspace_type, pm_id')
+    .eq('id', projectId)
+    .single()
+  if (!projectRow || projectRow.workspace_type !== 'team') throw new Error('Invalid project')
+
+  const priv = await resolveTeamProjectPrivilege(supabase, actor.id, projectRow)
+  if (!canManageProjectRoles(priv)) throw new Error('Forbidden: Only company admins or the billing owner can remove project roles')
+
   const { error } = await supabase
     .from('project_members')
     .delete()
@@ -268,9 +260,24 @@ export async function createProjectAction(project: Partial<Project>): Promise<{ 
       team_id: isPersonal ? null : teamId,
     }
 
-    // Security check: Only Admins or PMs can create Team projects
-    if (!isPersonal && activeRole !== 'admin' && activeRole !== 'pm') {
-      return { success: false, error: 'Forbidden: Only Administrators or Project Managers can create team projects' }
+    if (!isPersonal && teamId) {
+      const { data: prof } = await supabase.from('profiles').select('role').eq('id', profile.id).maybeSingle()
+      const { data: teamRow } = await supabase.from('teams').select('owner_id').eq('id', teamId).maybeSingle()
+      const { data: tm } = await supabase
+        .from('team_members')
+        .select('role')
+        .eq('team_id', teamId)
+        .eq('profile_id', profile.id)
+        .maybeSingle()
+      const canSetLeadership =
+        prof?.role === 'admin' || teamRow?.owner_id === profile.id || tm?.role === 'admin'
+      if (prof?.role !== 'admin' && !tm) {
+        return { success: false, error: 'Forbidden: You must be a member of this team to create projects' }
+      }
+      if (!canSetLeadership) {
+        payload.pm_id = null
+        payload.client_id = null
+      }
     }
 
     // Clean up UI-only or temp fields
@@ -309,17 +316,36 @@ export async function updateProjectAction(id: string, updates: Partial<Project>)
   if (!session) throw new Error('Unauthorized')
   
   const supabase = await createClient()
-  
-  // Security check: ensure user owns this project if personal
-  if (session.accountKind === 'personal') {
-    const profile = await getProfileByEmail(supabase, session.email)
-    const { data: existing } = await supabase
-      .from('projects')
-      .select('owner_id')
-      .eq('id', id)
-      .single()
-    
-    if (existing?.owner_id !== profile?.id) throw new Error('Forbidden')
+  const profile = await getProfileByEmail(supabase, session.email)
+  if (!profile) throw new Error('Unauthorized')
+
+  const { data: existing } = await supabase
+    .from('projects')
+    .select('owner_id, workspace_type, team_id, pm_id')
+    .eq('id', id)
+    .single()
+
+  if (!existing) throw new Error('Not found')
+
+  if (session.accountKind === 'personal' || existing.workspace_type === 'personal') {
+    if (existing.owner_id !== profile.id) throw new Error('Forbidden')
+  } else if (existing.workspace_type === 'team') {
+    const priv = await resolveTeamProjectPrivilege(supabase, profile.id, {
+      id,
+      team_id: existing.team_id,
+      workspace_type: existing.workspace_type,
+      pm_id: existing.pm_id,
+    })
+    if (!canUpdateTeamProjectMetadata(priv)) throw new Error('Forbidden')
+
+    const leadershipKeys = ['pm_id', 'client_id', 'team_id', 'owner_id'] as const
+    if (priv !== 'team_manage') {
+      for (const key of leadershipKeys) {
+        if (key in updates && (updates as Record<string, unknown>)[key] !== undefined) {
+          throw new Error('Forbidden: Only company admins or the billing owner can change PM/client assignment')
+        }
+      }
+    }
   }
 
   const { error } = await supabase
@@ -336,17 +362,27 @@ export async function deleteProjectAction(id: string) {
   if (!session) throw new Error('Unauthorized')
   
   const supabase = await createClient()
-  
-  // Security check same as update
-  if (session.accountKind === 'personal') {
-    const profile = await getProfileByEmail(supabase, session.email)
-    const { data: existing } = await supabase
-      .from('projects')
-      .select('owner_id')
-      .eq('id', id)
-      .single()
-    
-    if (existing?.owner_id !== profile?.id) throw new Error('Forbidden')
+  const profile = await getProfileByEmail(supabase, session.email)
+  if (!profile) throw new Error('Unauthorized')
+
+  const { data: existing } = await supabase
+    .from('projects')
+    .select('owner_id, workspace_type, team_id, pm_id')
+    .eq('id', id)
+    .single()
+
+  if (!existing) throw new Error('Not found')
+
+  if (session.accountKind === 'personal' || existing.workspace_type === 'personal') {
+    if (existing.owner_id !== profile.id) throw new Error('Forbidden')
+  } else if (existing.workspace_type === 'team') {
+    const priv = await resolveTeamProjectPrivilege(supabase, profile.id, {
+      id,
+      team_id: existing.team_id,
+      workspace_type: existing.workspace_type,
+      pm_id: existing.pm_id,
+    })
+    if (!canDeleteTeamProject(priv)) throw new Error('Forbidden')
   }
 
   const { error } = await supabase

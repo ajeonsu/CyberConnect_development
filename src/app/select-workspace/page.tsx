@@ -60,17 +60,10 @@ function SelectWorkspaceContent() {
     router.refresh();
   };
 
-  const handleSelectTeam = async (slug: string, membershipRole: TeamMembership['role']) => {
+  const handleSelectTeam = async (slug: string) => {
     if (!slug) return;
-    // membershipRole is team membership (admin | member), not workspace perspective (pm, dev, …).
-    // Only /:slug/admin/dashboard exists for team admins; members must pick a workspace role next.
-    if (membershipRole === 'admin') {
-      await updateActiveRoleAction('admin', slug);
-      router.push(`/${slug}/admin/dashboard`);
-    } else {
-      await updateActiveRoleAction('pm', slug);
-      router.push(`/switch-role?team=${encodeURIComponent(slug)}`);
-    }
+    await updateActiveRoleAction('admin', slug);
+    router.push(`/${slug}/admin/dashboard`);
     router.refresh();
   };
 
@@ -87,10 +80,10 @@ function SelectWorkspaceContent() {
       return;
     }
 
-    await updateActiveRoleAction('pm', res.teamSlug);
+    await updateActiveRoleAction('admin', res.teamSlug);
     setShowJoinModal(false);
     setJoinCode('');
-    router.push(`/switch-role?team=${encodeURIComponent(res.teamSlug)}`);
+    router.push(`/${res.teamSlug}/admin/dashboard`);
     router.refresh();
   };
 
@@ -163,7 +156,7 @@ function SelectWorkspaceContent() {
               memberships.map((m) => (
                 <button
                   key={m.team_id}
-                  onClick={() => handleSelectTeam(m.team?.slug || '', m.role)}
+                  onClick={() => handleSelectTeam(m.team?.slug || '')}
                   className="w-full group flex items-center gap-4 bg-surface-900 border border-surface-700 rounded-2xl p-4 transition-all hover:border-brand-500/50 hover:bg-surface-850"
                 >
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-lg shrink-0 group-hover:scale-105 transition-transform">

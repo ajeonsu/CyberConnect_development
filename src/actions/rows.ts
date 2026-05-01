@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase-server'
 import { getSession } from './auth'
+import { resolveTeamProjectPrivilege, canMutateSheetRows } from '@/lib/team-project-auth'
 import { SheetRow, ImportValidationResult, ImportFinalResult, ImportConflict, ConflictChoice, ImportPreviewRow } from '@/types'
 import { revalidatePath } from 'next/cache'
 import { SupabaseClient } from '@supabase/supabase-js'
@@ -212,6 +213,25 @@ async function verifyProjectAccess(supabase: SupabaseClient, projectId: string) 
   return false
 }
 
+async function assertCanMutateTeamSheets(supabase: SupabaseClient, projectId: string) {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+
+  const { data: profile } = await supabase.from('profiles').select('id').eq('email', session.email).maybeSingle()
+  if (!profile) throw new Error('Unauthorized')
+
+  const { data: project } = await supabase
+    .from('projects')
+    .select('id, team_id, workspace_type, pm_id')
+    .eq('id', projectId)
+    .maybeSingle()
+
+  if (!project || project.workspace_type !== 'team') return
+
+  const priv = await resolveTeamProjectPrivilege(supabase, profile.id, project)
+  if (!canMutateSheetRows(priv)) throw new Error('Forbidden')
+}
+
 /** For team projects, only these profiles may be stored as `task_rows.assignee_id`. */
 async function loadTeamProjectDeveloperIds(
   supabase: SupabaseClient,
@@ -283,6 +303,7 @@ export async function upsertSheetRowAction(tabId: string, row: Partial<SheetRow>
 
   const supabase = await createClient()
   if (!(await verifyProjectAccess(supabase, row.project_id))) throw new Error('Forbidden')
+  await assertCanMutateTeamSheets(supabase, row.project_id)
 
   const cleanedData = sanitizeRowData(row, tableName)
 
@@ -320,6 +341,7 @@ export async function deleteSheetRowAction(tabId: string, projectId: string, row
 
   const supabase = await createClient()
   if (!(await verifyProjectAccess(supabase, projectId))) throw new Error('Forbidden')
+  await assertCanMutateTeamSheets(supabase, projectId)
 
   const { error } = await supabase
     .from(tableName)
@@ -348,6 +370,7 @@ export async function validateAndMapImportRows(
 
   const supabase = await createClient()
   if (!(await verifyProjectAccess(supabase, projectId))) throw new Error('Forbidden')
+  await assertCanMutateTeamSheets(supabase, projectId)
 
   // Map Excel rows to sheet rows using column mapping
   const mappedRows = excelRows.map((excelRow, idx) => {
@@ -451,6 +474,7 @@ export async function finalizeImportRows(
 
   const supabase = await createClient()
   if (!(await verifyProjectAccess(supabase, projectId))) throw new Error('Forbidden')
+  await assertCanMutateTeamSheets(supabase, projectId)
 
   const successful: SheetRow[] = []
   const failed: Array<{ rowData: Record<string, unknown>; reason: string }> = []

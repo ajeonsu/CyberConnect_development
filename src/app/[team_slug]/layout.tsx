@@ -32,9 +32,14 @@ function TeamRoleLayoutContent({ children }: { children: React.ReactNode }) {
     teamMemberships
   } = useWorkspace();
 
-  const handleSwitchTeam = useCallback((slug: string) => {
-    router.push(`/switch-role?team=${slug}`);
-  }, [router]);
+  const handleSwitchTeam = useCallback(
+    async (slug: string) => {
+      await updateActiveRoleAction('admin', slug);
+      router.push(`/${slug}/admin/dashboard`);
+      router.refresh();
+    },
+    [router]
+  );
 
   const activeProjectId = params.id as string | undefined;
   const activeTabId = params.tabId as string | undefined;

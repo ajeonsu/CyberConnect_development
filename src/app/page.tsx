@@ -4,7 +4,6 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/actions/auth';
 import { getMyProfileAction } from '@/actions/profiles';
-import { supabase } from '@/lib/supabase';
 
 export default function HomePage() {
   const router = useRouter();
@@ -20,15 +19,15 @@ export default function HomePage() {
         
         await getMyProfileAction();
 
-        const role = session.activeWorkspaceRole;
         const teamSlug = session.activeTeamSlug;
+        const workspaceRole = session.activeWorkspaceRole;
         const isPersonal =
-          role === 'personal' || session.accountKind === 'personal';
+          workspaceRole === 'personal' || session.accountKind === 'personal';
 
         if (isPersonal) {
           router.push('/personal/dashboard');
-        } else if (teamSlug && role) {
-          router.push(`/${teamSlug}/${role}/dashboard`);
+        } else if (teamSlug) {
+          router.push(`/${teamSlug}/admin/dashboard`);
         } else {
           router.push('/select-workspace');
         }

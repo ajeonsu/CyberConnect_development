@@ -1,30 +1,48 @@
-import type { SheetTab, SheetColumn, SheetRow, Project, UserProfile, UserRole } from '@/types';
+import type { SheetTab, SheetColumn, SheetRow, Project, UserProfile, UserRole, TeamMembership } from '@/types';
 
-/** Project-scoped role for sheet read/write rules (distinct from URL/platform role). */
+/** Project-scoped role for sheet read/write rules (distinct from URL/workspace routing). */
 export type ProjectSheetRole = 'pm' | 'dev' | 'client';
 
+export type ProjectSheetRoleOptions = {
+  /** Company admin or billing owner for this team — full PM-level access on every team project. */
+  isTeamAdminOrOwner?: boolean;
+  /** `profiles.role` — platform administrators retain full PM-level access. */
+  profileRole?: UserRole;
+};
+
+/** Whether the user may manage company-level settings for the given team slug. */
+export function isTeamAdminOrOwner(
+  userId: string | undefined,
+  teamSlug: string | undefined,
+  teamMemberships: TeamMembership[]
+): boolean {
+  if (!userId || !teamSlug) return false;
+  const m = teamMemberships.find(x => x.team?.slug === teamSlug);
+  if (!m?.team) return false;
+  if (m.role === 'admin') return true;
+  return m.team.owner_id === userId;
+}
+
 /**
- * Resolves the current user's role on a team project from pm_id, client_id, and project_members.
- * Personal projects are treated as PM (owner). Platform admins use PM-level sheet access.
+ * Resolves sheet UI rules for the current user on a project.
+ * Team workspaces: edit rights come only from project assignment (PM/Dev), client stakeholder rows,
+ * or company Admin/Owner / platform admin — never from a self-selected global workspace role.
  */
 export function getCurrentUserProjectSheetRole(
   userId: string | undefined,
   project: Project | null,
-  platformRole: UserRole
+  _legacyPlatformRole: UserRole,
+  options?: ProjectSheetRoleOptions
 ): ProjectSheetRole {
   if (!userId || !project) return 'client';
   if (project.workspace_type === 'personal') return 'pm';
-  if (platformRole === 'admin') return 'pm';
+
+  if (options?.profileRole === 'admin') return 'pm';
+  if (options?.isTeamAdminOrOwner) return 'pm';
 
   const mine = project.projectMemberEntries?.find(m => m.profile_id === userId);
   const isProjectDeveloper =
     (project.assignedDevIds ?? []).includes(userId) || mine?.workspace_role === 'dev';
-
-  // Browsing …/dev/… should use developer sheet rules when this user is an assigned developer on the
-  // project, even if they are also the PM (`pm_id` would otherwise always win and show the full PM grid).
-  if (platformRole === 'dev' && isProjectDeveloper) {
-    return 'dev';
-  }
 
   if (project.pm_id === userId) return 'pm';
 
@@ -35,8 +53,6 @@ export function getCurrentUserProjectSheetRole(
   if (project.client_id === userId) return 'client';
   if (isProjectDeveloper) return 'dev';
 
-  if (platformRole === 'pm') return 'pm';
-  if (platformRole === 'dev') return 'dev';
   return 'client';
 }
 

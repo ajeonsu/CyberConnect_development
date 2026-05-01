@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { Project, SheetRow, UserProfile } from '@/types';
 import { FolderOpen, CheckCircle, Clock, Pause, Users, ListChecks, AlertTriangle, Plus, X, ChevronDown, BarChart3, Sparkles, Loader, Info } from 'lucide-react';
-import { getUserName, getProfilesByRole, translate, type Language } from '@/lib/data';
+import { getUserName, translate, type Language } from '@/lib/data';
 import { useWorkspace } from '@/components/WorkspaceProvider';
 import { DashboardLanguageToggle } from '@/components/dashboard/DashboardLanguageToggle';
 import type { GlobalTaskStats } from '@/lib/dal/stats';
@@ -19,6 +19,10 @@ interface Props {
   onAddProject: (project: Partial<Project>) => Promise<void>;
   onDeleteProject?: (projectId: string) => void;
   serverStats: GlobalTaskStats;
+  /** Company admin or billing owner — may assign PM/Dev and invite by policy. */
+  canAssignProjectRoles?: boolean;
+  /** Whether the current user may delete this project (admin/owner or assigned PM). */
+  canDeleteProject?: (project: Project) => boolean;
 }
 
 const PROJECT_COLORS = [
@@ -30,7 +34,19 @@ const PROJECT_COLORS = [
   'from-cyan-500 to-cyan-700',
 ];
 
-export function AdminView({ projects, getSheetData, onSelectProject, onUpdateProject, onAssignMember, onRemoveMember, onAddProject, onDeleteProject, serverStats }: Props) {
+export function AdminView({
+  projects,
+  getSheetData,
+  onSelectProject,
+  onUpdateProject,
+  onAssignMember,
+  onRemoveMember,
+  onAddProject,
+  onDeleteProject,
+  serverStats,
+  canAssignProjectRoles = true,
+  canDeleteProject = () => true,
+}: Props) {
   const { loggedInUser, teamPool, language, setLanguage } = useWorkspace();
   const [showNewProject, setShowNewProject] = useState(false);
   const [editingPm, setEditingPm] = useState<string | null>(null);
@@ -291,17 +307,19 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                       </div>
 
                       <div className="pt-4 border-t border-surface-800/60 space-y-4">
-                        {/* PM Dropdown Section */}
                         <div className="flex items-center justify-between group/pm">
                           <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{translate('PM', language)}</span>
-                          {editingPm === project.id ? (
+                          {!canAssignProjectRoles ? (
+                            <span className="text-[11px] text-gray-300 font-medium">
+                              {getUserName(project.pm_id || '') || '—'}
+                            </span>
+                          ) : editingPm === project.id ? (
                             <div className="flex-1 flex justify-end ml-4">
                               <select
                                 value={project.pm_id || ''}
                                 onChange={async e => {
                                   const sid = e.target.value;
                                   if (!sid) {
-                                    // Handle unassign
                                     if (project.pm_id) {
                                       await onRemoveMember(project.id, project.pm_id);
                                       onUpdateProject(project.id, { pm_id: null });
@@ -309,17 +327,16 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                                     setEditingPm(null);
                                     return;
                                   }
-                                  
+
                                   const member = finalTeamPool.find(u => u.id === sid);
                                   const isStaff = member?.team_role === 'admin' || member?.team_role === 'member';
-                                  
+
                                   if (!isStaff && remainingSeats <= 0) {
                                     alert('Cannot assign. Team is at 20/20 staff limit.');
                                     return;
                                   }
                                   try {
                                     await onAssignMember(project.id, sid, 'pm');
-                                    // Immediate update
                                     onUpdateProject(project.id, { pm_id: sid });
                                     setEditingPm(null);
                                   } catch (err: any) {
@@ -340,27 +357,39 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                               </select>
                             </div>
                           ) : (
-                            <button onClick={() => setEditingPm(project.id)} className="text-[11px] text-gray-300 font-medium hover:text-brand-300 transition-colors flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setEditingPm(project.id)}
+                              className="text-[11px] text-gray-300 font-medium hover:text-brand-300 transition-colors flex items-center gap-1"
+                            >
                               {getUserName(project.pm_id || '')} <ChevronDown className="w-3 h-3 text-gray-600" />
                             </button>
                           )}
                         </div>
 
-                        {/* Developers Section (Always Rendered) */}
                         <div className="space-y-2">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">{translate('Developers', language)}</span>
-                            {!editingDevs || editingDevs !== project.id ? (
-                              <button onClick={() => setEditingDevs(project.id)} className="text-[11px] text-gray-400 font-medium hover:text-brand-300 transition-colors flex items-center gap-1">
-                                {(project.assignedDevIds || []).length > 0 ? `${(project.assignedDevIds || []).length} Assigned` : 'Assign'}
-                                <ChevronDown className="w-3 h-3 text-gray-600" />
-                              </button>
-                            ) : (
-                              <button onClick={() => setEditingDevs(null)} className="text-[10px] text-brand-400 font-bold hover:underline">Done</button>
-                            )}
+                            {canAssignProjectRoles &&
+                              (!editingDevs || editingDevs !== project.id ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingDevs(project.id)}
+                                  className="text-[11px] text-gray-400 font-medium hover:text-brand-300 transition-colors flex items-center gap-1"
+                                >
+                                  {(project.assignedDevIds || []).length > 0
+                                    ? `${(project.assignedDevIds || []).length} Assigned`
+                                    : 'Assign'}
+                                  <ChevronDown className="w-3 h-3 text-gray-600" />
+                                </button>
+                              ) : (
+                                <button type="button" onClick={() => setEditingDevs(null)} className="text-[10px] text-brand-400 font-bold hover:underline">
+                                  Done
+                                </button>
+                              ))}
                           </div>
-                          
-                          {editingDevs === project.id && (
+
+                          {canAssignProjectRoles && editingDevs === project.id && (
                             <div className="flex flex-wrap gap-1.5 p-2 bg-surface-950/40 rounded-lg border border-surface-800/60 animate-fade-in">
                               {finalTeamPool.length === 0 && <p className="text-[10px] text-gray-600 italic">No team members available</p>}
                               {finalTeamPool.map(member => {
@@ -369,9 +398,9 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                                   <button
                                     key={member.id}
                                     title={member.email}
+                                    type="button"
                                     onClick={async () => {
                                       if (isAssigned) {
-                                        // Unassign logic
                                         try {
                                           await onRemoveMember(project.id, member.id);
                                           const newDevs = (project.assignedDevIds || []).filter(id => id !== member.id);
@@ -395,8 +424,8 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                                       }
                                     }}
                                     className={`text-[9px] px-2 py-0.5 rounded border transition-all ${
-                                      isAssigned 
-                                        ? 'bg-brand-500/20 border-brand-500/40 text-brand-300' 
+                                      isAssigned
+                                        ? 'bg-brand-500/20 border-brand-500/40 text-brand-300'
                                         : 'bg-surface-800 border-surface-700 text-gray-500 hover:text-gray-300'
                                     }`}
                                   >
@@ -406,12 +435,49 @@ export function AdminView({ projects, getSheetData, onSelectProject, onUpdatePro
                               })}
                             </div>
                           )}
+
+                          {!canAssignProjectRoles && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {(project.assignedDevIds || []).length === 0 ? (
+                                <span className="text-[10px] text-gray-600">—</span>
+                              ) : (
+                                (project.assignedDevIds || []).map(id => (
+                                  <span
+                                    key={id}
+                                    className="text-[9px] px-2 py-0.5 rounded border border-surface-700 text-gray-400"
+                                  >
+                                    {getUserName(id)}
+                                  </span>
+                                ))
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex items-center justify-end gap-2 pt-2">
-                          <button onClick={() => setInviteFor({ projectId: project.id, role: 'pm' })} className="text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:text-white transition-colors">{translate('Invite', language)}</button>
-                          <div className="w-1 h-1 rounded-full bg-surface-700" />
-                          <button onClick={() => setShowDeleteConfirmFor(project.id)} className="text-[9px] font-bold uppercase tracking-widest text-rose-500/80 hover:text-rose-400 transition-colors">{translate('Delete', language)}</button>
+                          {canAssignProjectRoles && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setInviteFor({ projectId: project.id, role: 'pm' })}
+                                className="text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:text-white transition-colors"
+                              >
+                                {translate('Invite', language)}
+                              </button>
+                              {canDeleteProject(project) && (
+                                <div className="w-1 h-1 rounded-full bg-surface-700" />
+                              )}
+                            </>
+                          )}
+                          {canDeleteProject(project) && (
+                            <button
+                              type="button"
+                              onClick={() => setShowDeleteConfirmFor(project.id)}
+                              className="text-[9px] font-bold uppercase tracking-widest text-rose-500/80 hover:text-rose-400 transition-colors"
+                            >
+                              {translate('Delete', language)}
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
