@@ -6,6 +6,7 @@ import { resolveTeamProjectPrivilege, canMutateSheetRows } from '@/lib/team-proj
 import { SheetRow, ImportValidationResult, ImportFinalResult, ImportConflict, ConflictChoice, ImportPreviewRow } from '@/types'
 import { revalidatePath } from 'next/cache'
 import { SupabaseClient } from '@supabase/supabase-js'
+import { computeNextTaskCode } from '@/lib/taskCodes'
 
 /**
  * Server-side actions for managing Sheet Rows across all tables.
@@ -271,6 +272,32 @@ function shapeTaskRowForClient(row: SheetRow): SheetRow {
   return shapeTaskRowsForClient([row])[0]
 }
 
+async function fetchTaskCodesForProject(supabase: SupabaseClient, projectId: string): Promise<string[]> {
+  const { data } = await supabase.from('task_rows').select('task_code').eq('project_id', projectId)
+  return (data ?? []).map((r) => String((r as { task_code: string }).task_code ?? ''))
+}
+
+/** Next `TSK-01-NNN` for the project (max matching suffix + 1, or 001 if none). */
+export async function getNextTaskCodeAction(projectId: string): Promise<string> {
+  const supabase = await createClient()
+  if (!(await verifyProjectAccess(supabase, projectId))) throw new Error('Forbidden')
+  const codes = await fetchTaskCodesForProject(supabase, projectId)
+  return computeNextTaskCode(codes)
+}
+
+function mapUniqueViolationError(tableName: string, err: unknown): Error {
+  const e = err as { code?: string; message?: string }
+  const code = e?.code ?? ''
+  const msg = (e?.message ?? '').toLowerCase()
+  const taskDup =
+    tableName === 'task_rows' &&
+    (code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint') || msg.includes('idx_task_code_project'))
+  if (taskDup) {
+    return new Error('duplicate_task_code')
+  }
+  return err instanceof Error ? err : new Error(String(err))
+}
+
 export async function getSheetRowsAction(projectId: string, tabId: string): Promise<SheetRow[]> {
   const tableName = TABLE_MAP[tabId]
   if (!tableName) return []
@@ -316,6 +343,24 @@ export async function upsertSheetRowAction(tabId: string, row: Partial<SheetRow>
         payload = { ...cleanedData, assignee_id: null };
       }
     }
+
+    const p = payload as Record<string, unknown>
+    const tcIn = String(p.task_code ?? '').trim()
+    const { data: existing } = await supabase
+      .from('task_rows')
+      .select('task_code')
+      .eq('id', row.id)
+      .maybeSingle()
+    const existingCode = existing ? String((existing as { task_code: string }).task_code ?? '').trim() : ''
+
+    if (!tcIn) {
+      if (existingCode) {
+        p.task_code = existingCode
+      } else {
+        const codes = await fetchTaskCodesForProject(supabase, row.project_id)
+        p.task_code = computeNextTaskCode(codes)
+      }
+    }
   }
 
   const { data, error } = await supabase
@@ -326,7 +371,7 @@ export async function upsertSheetRowAction(tabId: string, row: Partial<SheetRow>
 
   if (error) {
     console.error(`DB Error in ${tableName}:`, JSON.stringify(error, null, 2))
-    throw error
+    throw mapUniqueViolationError(tableName, error)
   }
   
   revalidatePath('/')
@@ -485,10 +530,22 @@ export async function finalizeImportRows(
     .eq('project_id', projectId)
   const existingRowsArray = (existingDbRows ?? []) as SheetRow[]
 
+  let pendingTaskCodes = existingRowsArray.map((r) => String(r.task_code ?? ''))
+
   // Import preview rows (no conflicts)
   for (const row of rowsToImport) {
     try {
       const cleanedData = sanitizeRowData(row as Record<string, unknown>, tableName)
+      if (tableName === 'task_rows') {
+        const tc = String(cleanedData.task_code ?? '').trim()
+        if (!tc) {
+          const next = computeNextTaskCode(pendingTaskCodes)
+          cleanedData.task_code = next
+          pendingTaskCodes = [...pendingTaskCodes, next]
+        } else {
+          pendingTaskCodes = [...pendingTaskCodes, tc]
+        }
+      }
       const comparableKeys = Object.keys(cleanedData).filter(key => key !== 'id' && key !== 'project_id' && key !== 'created_at' && key !== 'updated_at')
       const exactSignature = buildComparableSignature(cleanedData, comparableKeys)
 
@@ -516,7 +573,7 @@ export async function finalizeImportRows(
       if (error) {
         failed.push({
           rowData: cleanedData,
-          reason: error.message || 'Database error',
+          reason: mapUniqueViolationError(tableName, error).message || 'Database error',
         })
       } else {
         successful.push(data as SheetRow)

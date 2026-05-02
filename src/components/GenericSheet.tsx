@@ -14,7 +14,7 @@ import {
   type ProjectSheetRole,
   isTasksTab,
 } from '@/lib/data';
-import { ChevronUp, ChevronDown, Trash2, Plus, Download } from 'lucide-react';
+import { ChevronUp, ChevronDown, Trash2, Plus, Download, Loader2 } from 'lucide-react';
 import { ImportModal } from './ImportModal';
 import { ImportPreviewModal } from './ImportPreviewModal';
 import { ConflictResolver } from './ConflictResolver';
@@ -29,8 +29,8 @@ interface Props {
   projectSheetRole: ProjectSheetRole;
   language: Language;
   onSelectRow: (row: SheetRow) => void;
-  onUpdateRow: (id: string, key: string, value: string) => void;
-  onDeleteRow: (id: string) => void;
+  onUpdateRow: (id: string, key: string, value: string) => void | Promise<void>;
+  onDeleteRow: (id: string) => void | Promise<void>;
   onAddRow: () => void;
   selectedRowId: string | null;
 }
@@ -68,6 +68,9 @@ export function GenericSheet({
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [editingCell, setEditingCell] = useState<{ id: string; key: string } | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [pendingSaveCell, setPendingSaveCell] = useState<{ id: string; key: string } | null>(null);
+  const [sheetMutationError, setSheetMutationError] = useState<string | null>(null);
   
   // Import workflow state
   const [showImportModal, setShowImportModal] = useState(false);
@@ -131,10 +134,22 @@ export function GenericSheet({
     setEditValue(value);
   };
 
-  const commitEdit = () => {
+  const commitEdit = async () => {
     if (!editingCell) return;
-    onUpdateRow(editingCell.id, editingCell.key, editValue);
+    const cell = editingCell;
+    setSheetMutationError(null);
     setEditingCell(null);
+    setPendingSaveCell(cell);
+    try {
+      await Promise.resolve(onUpdateRow(cell.id, cell.key, editValue));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : ''
+      setSheetMutationError(
+        msg === 'duplicate_task_code' ? translate('duplicate_task_code', language) : translate('Save failed', language)
+      );
+    } finally {
+      setPendingSaveCell(null);
+    }
   };
 
   const resetImportFlow = () => {
@@ -203,8 +218,23 @@ export function GenericSheet({
     // Reset will be done by parent component reload
   };
 
+  const handleDeleteRow = async (rowId: string) => {
+    setSheetMutationError(null);
+    setPendingDeleteId(rowId);
+    try {
+      await Promise.resolve(onDeleteRow(rowId));
+    } catch {
+      setSheetMutationError(translate('Delete failed', language));
+    } finally {
+      setPendingDeleteId(null);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
+      {sheetMutationError && (
+        <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/20 text-xs text-red-300 shrink-0">{sheetMutationError}</div>
+      )}
       <div className="px-4 py-2 border-b border-surface-800 flex items-center gap-2 bg-surface-950/50">
         {canAddRow && (
           <>
@@ -288,6 +318,8 @@ export function GenericSheet({
                       ? (assigneeEffectiveId ? getUserName(assigneeEffectiveId) : '')
                       : getLocalizedCell(row, c.actualKey, language);
                   const isEditing = editingCell?.id === row.id && editingCell?.key === c.actualKey;
+                  const isSavingThisCell =
+                    pendingSaveCell?.id === row.id && pendingSaveCell?.key === c.actualKey;
                   const editable = canEditCell(c.sourceKey);
                   const isGuestEditable =
                     projectSheetRole === 'client' &&
@@ -307,7 +339,7 @@ export function GenericSheet({
                             autoFocus
                             value={editValue}
                             onChange={e => { setEditValue(e.target.value); }}
-                            onBlur={commitEdit}
+                            onBlur={() => void commitEdit()}
                             className="w-full bg-surface-800 border border-brand-500 rounded px-2 py-1 text-sm text-white focus:outline-none"
                             onClick={e => e.stopPropagation()}
                           >
@@ -319,7 +351,7 @@ export function GenericSheet({
                             autoFocus
                             value={editValue}
                             onChange={e => { setEditValue(e.target.value); }}
-                            onBlur={commitEdit}
+                            onBlur={() => void commitEdit()}
                             className="w-full bg-surface-800 border border-brand-500 rounded px-2 py-1 text-sm text-white focus:outline-none"
                             onClick={e => e.stopPropagation()}
                           >
@@ -330,8 +362,8 @@ export function GenericSheet({
                             autoFocus
                             value={editValue}
                             onChange={e => setEditValue(e.target.value)}
-                            onBlur={commitEdit}
-                            onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditingCell(null); }}
+                            onBlur={() => void commitEdit()}
+                            onKeyDown={e => { if (e.key === 'Enter') void commitEdit(); if (e.key === 'Escape') setEditingCell(null); }}
                             className={`w-full rounded border border-brand-500 bg-surface-800 px-2 py-1 text-sm text-white focus:outline-none ${
                               sourceCol.type === 'code' ? 'font-mono text-brand-300' : ''
                             }`}
@@ -339,8 +371,9 @@ export function GenericSheet({
                           />
                         )
                       ) : sourceCol.type === 'code' ? (
-                        <span className="font-mono text-xs bg-surface-800 px-2 py-1 rounded text-brand-300 border border-surface-700">
+                        <span className="font-mono text-xs bg-surface-800 px-2 py-1 rounded text-brand-300 border border-surface-700 inline-flex items-center gap-1.5">
                           {displayValue}
+                          {isSavingThisCell && <Loader2 className="w-3 h-3 animate-spin text-brand-400 shrink-0" />}
                         </span>
                       ) : sourceCol.type === 'status' || sourceCol.type === 'select' ? (
                         value ? (
@@ -374,10 +407,20 @@ export function GenericSheet({
                 {canDeleteRow && (
                   <td className="px-3 py-2">
                     <button
-                      onClick={(e) => { e.stopPropagation(); onDeleteRow(row.id); }}
-                      className="text-gray-600 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-500/10"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleDeleteRow(row.id);
+                      }}
+                      disabled={pendingDeleteId !== null}
+                      className="text-gray-600 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-500/10 disabled:opacity-40"
+                      aria-busy={pendingDeleteId === row.id}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      {pendingDeleteId === row.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
                     </button>
                   </td>
                 )}

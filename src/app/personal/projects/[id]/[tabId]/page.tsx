@@ -63,6 +63,20 @@ export default function PersonalProjectTabPage() {
     return sheetData[projectId]?.[tabId] ?? [];
   }, [sheetData, projectId, tabId]);
 
+  const registeredScreenCodes = useMemo(() => {
+    const rows = sheetData[projectId]?.screen_list ?? [];
+    return [...new Set(rows.map((r) => String(r.screen_code ?? '').trim()).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b)
+    );
+  }, [sheetData, projectId]);
+
+  const registeredFunctionCodes = useMemo(() => {
+    const rows = sheetData[projectId]?.function_list ?? [];
+    return [...new Set(rows.map((r) => String(r.function_code ?? '').trim()).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b)
+    );
+  }, [sheetData, projectId]);
+
   const selectedRowSynced = useMemo(() => {
     if (!selectedRow) return null;
     return currentRows.find(r => r.id === selectedRow.id) ?? selectedRow;
@@ -128,6 +142,8 @@ export default function PersonalProjectTabPage() {
             project={activeProject}
             projectSheetRole={projectSheetRole}
             language={language}
+            screenCodeOptions={registeredScreenCodes}
+            functionCodeOptions={registeredFunctionCodes}
             onClose={() => setSelectedRow(null)}
             onUpdate={async (updatedRow) => {
               await updateSheetRowData(projectId, tabId, updatedRow as SheetRow);
@@ -143,10 +159,12 @@ export default function PersonalProjectTabPage() {
             project={activeProject}
             projectSheetRole={projectSheetRole}
             language={language}
+            screenCodeOptions={registeredScreenCodes}
+            functionCodeOptions={registeredFunctionCodes}
             onClose={() => setShowAddRow(false)}
             onSave={async (newRow) => {
-              setShowAddRow(false);
               await addSheetRow(projectId, tabId, newRow);
+              setShowAddRow(false);
             }}
           />
         )}

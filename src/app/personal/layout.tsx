@@ -4,7 +4,8 @@ import { useParams, usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/Sidebar';
 import { WorkspaceProvider, useWorkspace } from '@/components/WorkspaceProvider';
 import { sheetTabs } from '@/lib/data';
-import { Suspense, useCallback, useEffect } from 'react';
+import { Suspense, useCallback, useEffect, useTransition } from 'react';
+import { translate } from '@/lib/data';
 import { updateActiveRoleAction } from '@/actions/auth';
 
 function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
@@ -27,6 +28,7 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
     teamMemberships
   } = useWorkspace();
   const personalTeamSlug = loggedInUser?.activeTeamSlug || teamMemberships[0]?.team?.slug || 'my-team';
+  const [tabNavPending, startTabNavigation] = useTransition();
 
   const handleSwitchTeam = useCallback(
     async (slug: string) => {
@@ -68,7 +70,11 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
         user={loggedInUser}
         activeTabId={activeTabId || (pathname.includes('/dashboard') ? 'dashboard' : '')}
         visibleTabs={sheetTabs.filter(t => t.visibleTo.includes('pm'))}
-        onTabChange={(id) => router.push(`/personal/projects/${activeProjectId}/${id}`)}
+        onTabChange={(id) => {
+          startTabNavigation(() => {
+            router.push(`/personal/projects/${activeProjectId}/${id}`);
+          });
+        }}
         workspaceScope="personal"
         teamMemberships={teamMemberships}
         onSwitchTeam={handleSwitchTeam}
@@ -88,7 +94,13 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
         onUpdateCurrentTeam={updateCurrentTeam}
         onRegenerateCurrentTeamInviteCode={regenerateCurrentTeamInviteCode}
       />
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <main className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
+        {tabNavPending && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-surface-950/55 backdrop-blur-[1px] pointer-events-auto">
+            <div className="w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs text-gray-400">{translate('Navigating…', language)}</span>
+          </div>
+        )}
         <Suspense fallback={null}>
           {children}
         </Suspense>
