@@ -239,7 +239,7 @@ const bilingualRowFieldMap: Record<string, Record<string, string>> = {
   tasks: {
     epic: 'epic_ja',
     task: 'task_ja',
-    remark: 'remark_ja',
+    // remark / remark_ja are separate columns on the Tasks sheet — do not map here
   },
   test_case: {
     category: 'category_ja',
@@ -270,6 +270,24 @@ const bilingualRowFieldMap: Record<string, Record<string, string>> = {
 
 export function getBilingualRowFieldKey(tabId: string, key: string): string | null {
   return bilingualRowFieldMap[tabId]?.[key] ?? null;
+}
+
+/** True when this column and `${key}_ja` are both real columns (do not virtual-split or locale-fallback in the grid). */
+export function columnUsesExplicitJaPair(tab: SheetTab, key: string): boolean {
+  if (key.endsWith('_ja')) {
+    const base = key.replace(/_ja$/, '');
+    return tab.columns.some((c) => c.key === base);
+  }
+  return tab.columns.some((c) => c.key === `${key}_ja`);
+}
+
+/**
+ * True when `col.key` maps to a JA field that is NOT a separate tab column (e.g. task/task_ja — use one EN/JA block in forms).
+ */
+export function shouldRenderMergedBilingualBlock(tab: SheetTab, colKey: string): boolean {
+  const jaKey = getBilingualRowFieldKey(tab.id, colKey);
+  if (!jaKey) return false;
+  return !tab.columns.some((c) => c.key === jaKey);
 }
 
 export const sheetTabs: SheetTab[] = [

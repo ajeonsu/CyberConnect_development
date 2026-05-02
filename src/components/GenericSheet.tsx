@@ -10,6 +10,7 @@ import {
   getLocalizedCell,
   getLocalizedColumnLabel,
   getBilingualRowFieldKey,
+  columnUsesExplicitJaPair,
   type Language,
   type ProjectSheetRole,
   isTasksTab,
@@ -316,7 +317,9 @@ export function GenericSheet({
                     ? value
                     : isTasksAssignee
                       ? (assigneeEffectiveId ? getUserName(assigneeEffectiveId) : '')
-                      : getLocalizedCell(row, c.actualKey, language);
+                      : columnUsesExplicitJaPair(tab, c.actualKey)
+                        ? String(row[c.actualKey] ?? '')
+                        : getLocalizedCell(row, c.actualKey, language);
                   const isEditing = editingCell?.id === row.id && editingCell?.key === c.actualKey;
                   const isSavingThisCell =
                     pendingSaveCell?.id === row.id && pendingSaveCell?.key === c.actualKey;

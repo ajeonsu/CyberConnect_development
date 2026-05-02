@@ -6,6 +6,9 @@ import {
   getLocalizedCell,
   getLocalizedColumnLabel,
   getLocalizedTabName,
+  getBilingualRowFieldKey,
+  shouldRenderMergedBilingualBlock,
+  columnUsesExplicitJaPair,
   type Language,
   type ProjectSheetRole,
   getClientRemarkColumnKeys,
@@ -131,8 +134,100 @@ export function SheetRowDetail({
         )}
         <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
           {tab.columns.map(col => {
+            const mergedJaKey = getBilingualRowFieldKey(tab.id, col.key);
+            if (mergedJaKey && shouldRenderMergedBilingualBlock(tab, col.key)) {
+              const valueEn = String(formData[col.key] ?? '');
+              const valueJa = String(formData[mergedJaKey] ?? '');
+              const editableMerged = canEditField(col.key);
+              const lockedMerged =
+                !editableMerged && (clientRemarkOnly || devNonTaskLock);
+              return (
+                <div key={col.key}>
+                  <label className="text-xs text-gray-500 mb-1.5 flex items-center gap-2">
+                    <span className="flex flex-col">
+                      <span>{getLocalizedColumnLabel(col, language)}</span>
+                      <span className="text-[10px] text-gray-600">
+                        {getLocalizedColumnLabel(col, oppositeLanguage)}
+                      </span>
+                    </span>
+                    <span className="ml-auto text-[10px] px-2 py-1 rounded-full bg-brand-500/10 text-brand-300 border border-brand-500/20">
+                      EN / JA
+                    </span>
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <div className="mb-1 text-[10px] uppercase tracking-widest text-gray-500">English</div>
+                      {editableMerged && col.type === 'longtext' ? (
+                        <textarea
+                          value={valueEn}
+                          onChange={e =>
+                            setFormData(prev => ({ ...prev, [col.key]: e.target.value }))
+                          }
+                          rows={4}
+                          disabled={savePending}
+                          className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-brand-500/40 resize-none min-h-[100px]"
+                        />
+                      ) : editableMerged && col.type !== 'longtext' ? (
+                        <input
+                          type={col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'}
+                          value={valueEn}
+                          onChange={e =>
+                            setFormData(prev => ({ ...prev, [col.key]: e.target.value }))
+                          }
+                          disabled={savePending}
+                          className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+                        />
+                      ) : lockedMerged ? (
+                        <p className={`text-sm text-gray-300 bg-surface-850 rounded-lg px-3 py-2 border border-surface-800 whitespace-pre-wrap min-h-[36px] ${readOnlyControlClass}`}>
+                          {valueEn || <span className="text-gray-600 italic">—</span>}
+                        </p>
+                      ) : (
+                        <p className="text-sm text-gray-300 bg-surface-850 rounded-lg px-3 py-2 border border-surface-800 whitespace-pre-wrap min-h-[36px]">
+                          {valueEn || <span className="text-gray-600 italic">—</span>}
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <div className="mb-1 text-[10px] uppercase tracking-widest text-gray-500">Japanese</div>
+                      {editableMerged && col.type === 'longtext' ? (
+                        <textarea
+                          value={valueJa}
+                          onChange={e =>
+                            setFormData(prev => ({ ...prev, [mergedJaKey]: e.target.value }))
+                          }
+                          rows={4}
+                          disabled={savePending}
+                          className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-brand-500/40 resize-none min-h-[100px]"
+                        />
+                      ) : editableMerged && col.type !== 'longtext' ? (
+                        <input
+                          type={col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'}
+                          value={valueJa}
+                          onChange={e =>
+                            setFormData(prev => ({ ...prev, [mergedJaKey]: e.target.value }))
+                          }
+                          disabled={savePending}
+                          className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+                        />
+                      ) : lockedMerged ? (
+                        <p className={`text-sm text-gray-300 bg-surface-850 rounded-lg px-3 py-2 border border-surface-800 whitespace-pre-wrap min-h-[36px] ${readOnlyControlClass}`}>
+                          {valueJa || <span className="text-gray-600 italic">—</span>}
+                        </p>
+                      ) : (
+                        <p className="text-sm text-gray-300 bg-surface-850 rounded-lg px-3 py-2 border border-surface-800 whitespace-pre-wrap min-h-[36px]">
+                          {valueJa || <span className="text-gray-600 italic">—</span>}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
             const value = String(formData[col.key] ?? '');
-            const displayValue = getLocalizedCell(formData as SheetRow, col.key, language);
+            const displayValue = columnUsesExplicitJaPair(tab, col.key)
+              ? String(formData[col.key] ?? '')
+              : getLocalizedCell(formData as SheetRow, col.key, language);
             const editable = canEditField(col.key);
             const lockedVisual = !editable && (clientRemarkOnly || devNonTaskLock);
             const readonlyDisplay =
