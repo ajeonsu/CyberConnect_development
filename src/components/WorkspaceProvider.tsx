@@ -42,6 +42,8 @@ interface WorkspaceContextType {
   updateCurrentTeam: (updates: { name?: string }) => Promise<void>;
   regenerateCurrentTeamInviteCode: () => Promise<string>;
   refreshSheetData: (projectId: string) => Promise<void>;
+  /** Reload one tab only — does not toggle full-project sheet loading (use after batch import). */
+  refreshSheetTab: (projectId: string, tabId: string) => Promise<void>;
   getProjectById: (id: string) => Project | null;
   refreshProject: (id: string) => Promise<Project | null>;
   updateSheetRow: (projectId: string, tabId: string, rowId: string, key: string, value: string) => Promise<void>;
@@ -473,6 +475,17 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     }
   }, []);
 
+  const refreshSheetTab = useCallback(async (projectId: string, tabId: string) => {
+    const rows = await getSheetRowsAction(projectId, tabId);
+    setSheetData((prev) => ({
+      ...prev,
+      [projectId]: {
+        ...(prev[projectId] ?? {}),
+        [tabId]: rows,
+      },
+    }));
+  }, []);
+
   const getProjectById = useCallback((id: string) => {
     return projects.find(p => p.id === id) || null;
   }, [projects]);
@@ -603,6 +616,7 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     updateCurrentTeam,
     regenerateCurrentTeamInviteCode,
     refreshSheetData,
+    refreshSheetTab,
     getProjectById,
     refreshProject,
     updateSheetRow,

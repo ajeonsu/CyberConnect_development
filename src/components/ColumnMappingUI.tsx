@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { ChevronRight, X, Loader } from 'lucide-react';
 import type { SheetTab, SheetRow, ImportValidationPreview } from '@/types';
 import { validateAndMapImportRows } from '@/actions/rows';
-import { getImportMappingTargetsForTab } from '@/lib/data';
+import { getImportMappingTargetsForTab, translate, type Language } from '@/lib/data';
 
 interface Props {
   tab: SheetTab;
@@ -12,6 +12,8 @@ interface Props {
   onBack: () => void;
   onMappingComplete: (result: ImportValidationPreview) => void;
   onClose: () => void;
+  language?: Language;
+  onValidatingChange?: (validating: boolean) => void;
 }
 
 export function ColumnMappingUI({
@@ -22,6 +24,8 @@ export function ColumnMappingUI({
   onBack,
   onMappingComplete,
   onClose,
+  language = 'en',
+  onValidatingChange,
 }: Props) {
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [validating, setValidating] = useState(false);
@@ -86,6 +90,7 @@ export function ColumnMappingUI({
 
   const handleValidateAndContinue = async () => {
     setValidating(true);
+    onValidatingChange?.(true);
     setError('');
     
     try {
@@ -111,6 +116,7 @@ export function ColumnMappingUI({
       setError(err.message || 'Validation failed');
     } finally {
       setValidating(false);
+      onValidatingChange?.(false);
     }
   };
 
@@ -119,7 +125,18 @@ export function ColumnMappingUI({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={onClose}>
-      <div className="bg-surface-900 border border-surface-700 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-fade-in shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div
+        className="relative bg-surface-900 border border-surface-700 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-fade-in shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {validating && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-2xl bg-surface-950/80 backdrop-blur-sm">
+            <Loader className="h-8 w-8 animate-spin text-brand-400" />
+            <p className="mt-3 text-sm text-gray-200 text-center px-4">
+              {translate('Validating import on server…', language)}
+            </p>
+          </div>
+        )}
         <div className="flex items-center justify-between p-6 border-b border-surface-700">
           <div>
             <h2 className="text-lg font-semibold text-white">Map Columns</h2>
@@ -272,7 +289,7 @@ export function ColumnMappingUI({
             {validating ? (
               <>
                 <Loader className="w-4 h-4 animate-spin" />
-                Validating...
+                {translate('Validating import on server…', language)}
               </>
             ) : (
               <>

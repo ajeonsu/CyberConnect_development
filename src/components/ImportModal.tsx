@@ -4,15 +4,26 @@ import type { SheetTab, ImportValidationPreview } from '@/types';
 import * as XLSX from 'xlsx';
 import { parseWorksheetForImport } from '@/lib/importSheet';
 import { ColumnMappingUI } from './ColumnMappingUI';
+import { translate, type Language } from '@/lib/data';
 
 interface Props {
   tab: SheetTab;
   projectId: string;
   onClose: () => void;
   onMappingComplete: (result: ImportValidationPreview) => void;
+  language?: Language;
+  /** While reading the file or validating on the server — parent can show a global overlay if needed. */
+  onImportPhaseChange?: (phase: null | 'reading' | 'validating') => void;
 }
 
-export function ImportModal({ tab, projectId, onClose, onMappingComplete }: Props) {
+export function ImportModal({
+  tab,
+  projectId,
+  onClose,
+  onMappingComplete,
+  language = 'en',
+  onImportPhaseChange,
+}: Props) {
   const [step, setStep] = useState<'upload' | 'mapping'>('upload');
   const [excelData, setExcelData] = useState<{
     columns: string[];
@@ -36,7 +47,8 @@ export function ImportModal({ tab, projectId, onClose, onMappingComplete }: Prop
 
     setLoading(true);
     setError('');
-    
+    onImportPhaseChange?.('reading');
+
     try {
       const arrayBuffer = await file.arrayBuffer();
       const workbook = XLSX.read(arrayBuffer, { type: 'array' });
@@ -72,6 +84,7 @@ export function ImportModal({ tab, projectId, onClose, onMappingComplete }: Prop
       setError(`Failed to parse file: ${err.message}`);
     } finally {
       setLoading(false);
+      onImportPhaseChange?.(null);
     }
   };
 
@@ -82,19 +95,30 @@ export function ImportModal({ tab, projectId, onClose, onMappingComplete }: Prop
         projectId={projectId}
         excelColumns={excelData.columns}
         excelRows={excelData.rows}
+        language={language}
         onBack={() => {
           setStep('upload');
           setExcelData(null);
         }}
         onMappingComplete={onMappingComplete}
         onClose={onClose}
+        onValidatingChange={(v) => onImportPhaseChange?.(v ? 'validating' : null)}
       />
     );
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={onClose}>
-      <div className="bg-surface-900 border border-surface-700 rounded-2xl w-full max-w-lg p-6 animate-fade-in shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div
+        className="relative bg-surface-900 border border-surface-700 rounded-2xl w-full max-w-lg p-6 animate-fade-in shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {loading && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl bg-surface-950/80 backdrop-blur-sm">
+            <Loader className="h-8 w-8 animate-spin text-brand-400" />
+            <p className="mt-3 text-sm text-gray-200">{translate('Reading file…', language)}</p>
+          </div>
+        )}
         <div className="flex items-center justify-between mb-6">
           <div>
             <h2 className="text-lg font-semibold text-white">Batch Import</h2>
@@ -118,7 +142,9 @@ export function ImportModal({ tab, projectId, onClose, onMappingComplete }: Prop
               <div className="flex flex-col items-center justify-center">
                 <Upload className="w-8 h-8 text-gray-600 mb-2" />
                 <p className="text-sm font-medium text-gray-300">
-                  {loading ? 'Parsing file...' : 'Click to upload or drag'}
+                  {loading
+                    ? translate('Reading file…', language)
+                    : 'Click to upload or drag'}
                 </p>
                 <p className="text-xs text-gray-500 mt-1">Excel (.xlsx, .xls) or CSV (.csv)</p>
               </div>

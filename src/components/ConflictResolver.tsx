@@ -3,6 +3,7 @@ import { X, AlertCircle, Loader } from 'lucide-react';
 import type { ImportConflict, ConflictChoice } from '@/types';
 import { finalizeImportRows } from '@/actions/rows';
 import type { SheetRow } from '@/types';
+import { translate, type Language } from '@/lib/data';
 
 interface Props {
   projectId: string;
@@ -13,7 +14,10 @@ interface Props {
   totalRows: number;
   duplicateCount: number;
   onClose: () => void;
-  onImportComplete: (results: { successful: SheetRow[]; failed: any[] }) => void;
+  /** Called immediately before server finalize — show global saving overlay. */
+  onFinalizeStart?: () => void;
+  onImportComplete: (results: { successful: SheetRow[]; failed: any[] }) => void | Promise<void>;
+  language?: Language;
 }
 
 export function ConflictResolver({
@@ -25,7 +29,9 @@ export function ConflictResolver({
   totalRows,
   duplicateCount,
   onClose,
+  onFinalizeStart,
   onImportComplete,
+  language = 'en',
 }: Props) {
   const [resolutions, setResolutions] = useState<Record<number, 'skip' | 'overwrite' | 'use_new'>>({});
   const [importing, setImporting] = useState(false);
@@ -41,6 +47,7 @@ export function ConflictResolver({
   const handleContinueImport = async () => {
     setImporting(true);
     setError('');
+    onFinalizeStart?.();
 
     try {
       // Build rows to import
@@ -75,7 +82,7 @@ export function ConflictResolver({
         setError(`${result.failed.length} rows failed to import`);
       }
 
-      onImportComplete(result);
+      await Promise.resolve(onImportComplete(result));
     } catch (err: any) {
       setError(err.message || 'Import failed');
     } finally {
@@ -95,7 +102,9 @@ export function ConflictResolver({
         {importing && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-2xl bg-black/55 backdrop-blur-[2px]">
             <Loader className="h-8 w-8 animate-spin text-brand-400" />
-            <p className="mt-3 text-sm text-gray-200">Importing rows…</p>
+            <p className="mt-3 text-sm text-gray-200 text-center px-2">
+              {translate('Saving import and updating this sheet…', language)}
+            </p>
           </div>
         )}
         <div className="flex items-center justify-between p-6 border-b border-surface-700">

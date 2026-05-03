@@ -66,7 +66,7 @@ export function GenericSheet({
   onAddRow,
   selectedRowId,
 }: Props) {
-  const { refreshSheetData } = useWorkspace();
+  const { refreshSheetTab } = useWorkspace();
   const [sortKey, setSortKey] = useState<string>('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [editingCell, setEditingCell] = useState<{ id: string; key: string } | null>(null);
@@ -87,8 +87,8 @@ export function GenericSheet({
   const [showConflictResolver, setShowConflictResolver] = useState(false);
   const [showImportResults, setShowImportResults] = useState(false);
   const [importResults, setImportResults] = useState<{ successful: SheetRow[]; failed: any[] }>({ successful: [], failed: [] });
-  const [importFinishing, setImportFinishing] = useState(false);
-  const [importBanner, setImportBanner] = useState<{ kind: 'success' | 'warning'; text: string } | null>(null);
+  /** One overlay: DB import + refresh of this tab only (avoids full-project loading / unmounting the sheet). */
+  const [importSaving, setImportSaving] = useState(false);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
   const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
   const displayColumns = tab.columns.flatMap((c) => {
@@ -175,7 +175,7 @@ export function GenericSheet({
     setImportTotalRows(0);
     setImportDuplicateCount(0);
     setImportResults({ successful: [], failed: [] });
-    setImportFinishing(false);
+    setImportSaving(false);
   };
 
   const handleImportMappingComplete = (result: ImportValidationPreview) => {
@@ -197,58 +197,50 @@ export function GenericSheet({
       return;
     }
 
-    setImportFinishing(true);
+    setImportSaving(true);
     try {
       const result = await finalizeImportRows(project?.id || '', tab.id, importPreviewRows, []);
       setImportResults(result);
       if (project?.id) {
-        await refreshSheetData(project.id);
+        try {
+          await refreshSheetTab(project.id, tab.id);
+        } catch (e) {
+          console.error('refreshSheetTab after import:', e);
+        }
       }
     } catch (error) {
       console.error('Batch import failed:', error);
-      setImportResults({
-        successful: [],
+      const failedResult = {
+        successful: [] as SheetRow[],
         failed: [{ rowData: {}, reason: error instanceof Error ? error.message : 'Import failed' }],
-      });
+      };
+      setImportResults(failedResult);
     } finally {
-      setImportFinishing(false);
+      setImportSaving(false);
       setShowImportResults(true);
     }
   };
 
-  const handleConflictResolved = (results: { successful: SheetRow[]; failed: any[] }) => {
+  const handleConflictResolved = async (results: { successful: SheetRow[]; failed: any[] }) => {
     setImportResults(results);
     setShowConflictResolver(false);
-    void (async () => {
+    try {
       if (project?.id) {
-        await refreshSheetData(project.id);
+        try {
+          await refreshSheetTab(project.id, tab.id);
+        } catch (e) {
+          console.error('refreshSheetTab after import:', e);
+        }
       }
+    } finally {
+      setImportSaving(false);
       setShowImportResults(true);
-    })();
+    }
   };
 
   const handleImportComplete = () => {
-    const ok = importResults.successful.length;
-    const bad = importResults.failed.length;
-    if (bad > 0) {
-      setImportBanner({
-        kind: 'warning',
-        text:
-          language === 'ja'
-            ? `インポート完了：成功 ${ok} 件、失敗 ${bad} 件`
-            : `Import finished: ${ok} row(s) uploaded, ${bad} failed`,
-      });
-    } else if (ok > 0) {
-      setImportBanner({ kind: 'success', text: translate('Import completed.', language) });
-    }
     resetImportFlow();
   };
-
-  useEffect(() => {
-    if (!importBanner) return;
-    const t = window.setTimeout(() => setImportBanner(null), 8000);
-    return () => window.clearTimeout(t);
-  }, [importBanner]);
 
   useEffect(() => {
     const valid = new Set(rows.map((r) => r.id));
@@ -310,31 +302,17 @@ export function GenericSheet({
 
   return (
     <div className="h-full flex flex-col relative">
-      {importFinishing && (
+      {importSaving && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-3 rounded-xl border border-surface-700 bg-surface-900 px-8 py-6 shadow-xl">
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-surface-700 bg-surface-900 px-8 py-6 shadow-xl max-w-sm">
             <Loader2 className="h-8 w-8 animate-spin text-brand-400" />
-            <p className="text-sm text-gray-300">{translate('Importing rows…', language)}</p>
+            <p className="text-sm text-gray-200 text-center font-medium">
+              {translate('Saving import and updating this sheet…', language)}
+            </p>
+            <p className="text-xs text-gray-500 text-center">
+              {translate('This may take a moment for large files.', language)}
+            </p>
           </div>
-        </div>
-      )}
-      {importBanner && (
-        <div
-          className={`flex shrink-0 items-center justify-between gap-2 border-b px-4 py-2 text-xs ${
-            importBanner.kind === 'success'
-              ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
-              : 'border-amber-500/25 bg-amber-500/10 text-amber-200'
-          }`}
-        >
-          <span>{importBanner.text}</span>
-          <button
-            type="button"
-            onClick={() => setImportBanner(null)}
-            className="rounded p-0.5 hover:bg-white/10"
-            aria-label="Dismiss"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
         </div>
       )}
       {sheetMutationError && (
@@ -601,6 +579,7 @@ export function GenericSheet({
         <ImportModal
           tab={tab}
           projectId={project?.id || ''}
+          language={language}
           onClose={resetImportFlow}
           onMappingComplete={handleImportMappingComplete}
         />
@@ -632,7 +611,9 @@ export function GenericSheet({
           columnMapping={importColumnMapping}
           totalRows={importTotalRows}
           duplicateCount={importDuplicateCount}
+          language={language}
           onClose={() => setShowConflictResolver(false)}
+          onFinalizeStart={() => setImportSaving(true)}
           onImportComplete={handleConflictResolved}
         />
       )}
@@ -643,6 +624,7 @@ export function GenericSheet({
           failed={importResults.failed}
           totalRows={importTotalRows}
           duplicateCount={importDuplicateCount}
+          language={language}
           onClose={handleImportComplete}
         />
       )}
