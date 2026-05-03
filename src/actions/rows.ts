@@ -45,6 +45,79 @@ function buildComparableSignature(row: Record<string, unknown>, keys: string[]) 
     .join('|');
 }
 
+/** Partial unique index on non-empty business codes for these tables. */
+const UNIQUE_BUSINESS_CODE_FIELD: Partial<Record<string, string>> = {
+  function_list_rows: 'function_code',
+  screen_list_rows: 'screen_code',
+  task_rows: 'task_code',
+}
+
+function getBusinessCodeField(tableName: string): string | null {
+  return UNIQUE_BUSINESS_CODE_FIELD[tableName] ?? null
+}
+
+/**
+ * When the same code appears again in one import batch (or was reserved earlier in this loop),
+ * rewrite to `CODE-2`, `CODE-3`, … so Postgres unique constraints do not silently drop rows.
+ */
+function rewriteCodeIfClaimed(
+  tableName: string,
+  data: Record<string, unknown>,
+  claimed: Set<string>
+): void {
+  const field = getBusinessCodeField(tableName)
+  if (!field) return
+  const code = String(data[field] ?? '').trim()
+  if (!code) return
+  if (!claimed.has(code)) return
+
+  const base = code
+  let n = 2
+  let candidate = `${base}-${n}`
+  while (claimed.has(candidate)) {
+    n += 1
+    candidate = `${base}-${n}`
+  }
+  data[field] = candidate
+}
+
+function rememberClaimedCode(tableName: string, data: Record<string, unknown>, claimed: Set<string>): void {
+  const field = getBusinessCodeField(tableName)
+  if (!field) return
+  const code = String(data[field] ?? '').trim()
+  if (code) claimed.add(code)
+}
+
+function releaseClaimedCode(tableName: string, data: Record<string, unknown>, claimed: Set<string>): void {
+  const field = getBusinessCodeField(tableName)
+  if (!field) return
+  const code = String(data[field] ?? '').trim()
+  if (code) claimed.delete(code)
+}
+
+/** Allowed labels for public.phase_type (Postgres enum). Import spreadsheets use synonyms. */
+const PHASE_TYPE_CANONICAL = new Set(['MVP', 'v2', 'v3', 'actual_performance'])
+
+/**
+ * Map spreadsheet / UI text to a valid phase_type enum label.
+ * e.g. "The actual performance" -> "actual_performance"
+ */
+function canonicalPhaseTypeValue(val: unknown): string | null {
+  const raw = String(val ?? '').trim()
+  if (!raw) return null
+  if (PHASE_TYPE_CANONICAL.has(raw)) return raw
+
+  const lower = raw.toLowerCase().replace(/\s+/g, ' ').replace(/^the\s+/i, '').trim()
+  const alias: Record<string, string> = {
+    mvp: 'MVP',
+    v2: 'v2',
+    v3: 'v3',
+    'actual performance': 'actual_performance',
+    actual_performance: 'actual_performance',
+  }
+  return alias[lower] ?? null
+}
+
 function sanitizeRowData(row: Record<string, unknown>, tableName: string) {
   const clean: Record<string, unknown> = {}
 
@@ -133,6 +206,10 @@ function sanitizeRowData(row: Record<string, unknown>, tableName: string) {
   /** Table-specific mapping fixes */
 
   if (tableName === 'task_rows') {
+    if (clean.phase !== undefined && clean.phase !== null && String(clean.phase).trim() !== '') {
+      const p = canonicalPhaseTypeValue(clean.phase)
+      if (p !== null) clean.phase = p
+    }
     // assignee_id is nullable — do not default to current user (that blocked true "Unassigned" saves)
 
     // Ensure status is never empty
@@ -150,6 +227,10 @@ function sanitizeRowData(row: Record<string, unknown>, tableName: string) {
   }
 
   if (tableName === 'function_list_rows') {
+    if (clean.phase !== undefined && clean.phase !== null) {
+      const p = canonicalPhaseTypeValue(clean.phase)
+      clean.phase = p
+    }
     // Ensure enums aren't invalid empty strings
     // AND map 'Not started' (frontend) to 'Need to be checked' (DB enum default)
     if (clean.status === '' || clean.status === 'Not started') {
@@ -157,6 +238,13 @@ function sanitizeRowData(row: Record<string, unknown>, tableName: string) {
     }
     if (clean.completion_dev === '') clean.completion_dev = null;
     if (clean.completion_client === '') clean.completion_client = null;
+  }
+
+  if (tableName === 'api_list_rows') {
+    if (clean.mvp_required !== undefined && clean.mvp_required !== null) {
+      const p = canonicalPhaseTypeValue(clean.mvp_required)
+      clean.mvp_required = p
+    }
   }
 
   if (tableName === 'backlog_rows') {
@@ -493,12 +581,8 @@ export async function validateAndMapImportRows(
     })
   }
 
-  const firstIndexByCode = new Map<string, number>()
-  mappedRows.forEach((row, idx) => {
-    const cv = normalizeComparableValue(row[codeField])
-    if (!cv) return
-    if (!firstIndexByCode.has(cv)) firstIndexByCode.set(cv, idx)
-  })
+  /** First row index for each full-row signature (all mapped columns); used for duplicate-in-file only. */
+  const firstIndexByFileSignature = new Map<string, number>()
 
   // Detect conflicts and preview rows
   let exactDuplicateCount = 0
@@ -511,13 +595,18 @@ export async function validateAndMapImportRows(
       return
     }
 
-    const codeVal = normalizeComparableValue(row[codeField])
-    if (codeVal && firstIndexByCode.get(codeVal) !== idx) {
-      duplicateInFileCount += 1
-      allRows.push({ ...row, previewStatus: 'duplicate_in_file' })
-      return
+    // Within-file duplicate only when every mapped column matches an earlier row (same as DB exact-match logic).
+    if (exactSignature) {
+      const firstIdx = firstIndexByFileSignature.get(exactSignature)
+      if (firstIdx !== undefined) {
+        duplicateInFileCount += 1
+        allRows.push({ ...row, previewStatus: 'duplicate_in_file' })
+        return
+      }
+      firstIndexByFileSignature.set(exactSignature, idx)
     }
 
+    const codeVal = normalizeComparableValue(row[codeField])
     if (codeVal && existingRows[codeVal]) {
       conflicts.push({
         excelRowIndex: idx,
@@ -571,29 +660,49 @@ export async function finalizeImportRows(
     .eq('project_id', projectId)
   const existingRowsArray = (existingDbRows ?? []) as SheetRow[]
 
+  /** DB + codes reserved for earlier rows in this import (avoids unique violations on function_code / screen_code / task_code). */
+  const claimedCodes = new Set<string>()
+  for (const r of existingRowsArray) {
+    const f = getBusinessCodeField(tableName)
+    if (!f) break
+    const c = String((r as Record<string, unknown>)[f] ?? '').trim()
+    if (c) claimedCodes.add(c)
+  }
+
   let pendingTaskCodes = existingRowsArray.map((r) => String(r.task_code ?? ''))
 
   // Import preview rows (no conflicts)
   for (const row of rowsToImport) {
     try {
       const cleanedData = sanitizeRowData(row as Record<string, unknown>, tableName)
+
+      const comparableKeys = Object.keys(cleanedData).filter(
+        (key) => key !== 'id' && key !== 'project_id' && key !== 'created_at' && key !== 'updated_at'
+      )
+      const exactSignature = buildComparableSignature(cleanedData, comparableKeys)
+
+      if (
+        exactSignature &&
+        existingRowsArray.some(
+          (existingRow) =>
+            buildComparableSignature(existingRow as Record<string, unknown>, comparableKeys) === exactSignature
+        )
+      ) {
+        continue
+      }
+
       if (tableName === 'task_rows') {
         const tc = String(cleanedData.task_code ?? '').trim()
         if (!tc) {
-          const next = computeNextTaskCode(pendingTaskCodes)
-          cleanedData.task_code = next
-          pendingTaskCodes = [...pendingTaskCodes, next]
-        } else {
-          pendingTaskCodes = [...pendingTaskCodes, tc]
+          cleanedData.task_code = computeNextTaskCode(pendingTaskCodes)
         }
+        rewriteCodeIfClaimed(tableName, cleanedData, claimedCodes)
+        const finalTc = String(cleanedData.task_code ?? '').trim()
+        pendingTaskCodes = [...pendingTaskCodes, finalTc].filter(Boolean)
+      } else {
+        rewriteCodeIfClaimed(tableName, cleanedData, claimedCodes)
       }
-      const comparableKeys = Object.keys(cleanedData).filter(key => key !== 'id' && key !== 'project_id' && key !== 'created_at' && key !== 'updated_at')
-      const exactSignature = buildComparableSignature(cleanedData, comparableKeys)
 
-      if (exactSignature && existingRowsArray.some(existingRow => buildComparableSignature(existingRow as Record<string, unknown>, comparableKeys) === exactSignature)) {
-        continue
-      }
-      
       // Additional validation for team projects (assignee_id)
       if (tableName === 'task_rows') {
         const allowed = await loadTeamProjectDeveloperIds(supabase, projectId)
@@ -605,6 +714,8 @@ export async function finalizeImportRows(
         }
       }
 
+      rememberClaimedCode(tableName, cleanedData, claimedCodes)
+
       const { data, error } = await supabase
         .from(tableName)
         .upsert(cleanedData)
@@ -612,6 +723,7 @@ export async function finalizeImportRows(
         .single()
 
       if (error) {
+        releaseClaimedCode(tableName, cleanedData, claimedCodes)
         failed.push({
           rowData: cleanedData,
           reason: mapUniqueViolationError(tableName, error).message || 'Database error',

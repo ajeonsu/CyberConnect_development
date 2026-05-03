@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { X, Upload, Loader } from 'lucide-react';
 import type { SheetTab, ImportValidationPreview } from '@/types';
 import * as XLSX from 'xlsx';
+import { parseWorksheetForImport } from '@/lib/importSheet';
 import { ColumnMappingUI } from './ColumnMappingUI';
 
 interface Props {
@@ -49,18 +50,22 @@ export function ImportModal({ tab, projectId, onClose, onMappingComplete }: Prop
       }
       
       const worksheet = workbook.Sheets[sheetName];
-      
-      // Parse with headers from first row
-      const rows = XLSX.utils.sheet_to_json(worksheet) as Record<string, unknown>[];
-      
+
+      // Use AOA parsing so duplicate column names and trailing columns are preserved
+      const { columns, rows } = parseWorksheetForImport(worksheet);
+
       if (rows.length === 0) {
         setError('File has no data rows');
         setLoading(false);
         return;
       }
 
-      const columns = Object.keys(rows[0]);
-      
+      if (columns.length === 0) {
+        setError('File has no header row');
+        setLoading(false);
+        return;
+      }
+
       setExcelData({ columns, rows });
       setStep('mapping');
     } catch (err: any) {
