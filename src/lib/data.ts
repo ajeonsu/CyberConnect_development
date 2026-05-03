@@ -72,7 +72,7 @@ export function getCurrentUserProjectSheetRole(
 export function getClientRemarkColumnKeys(tabId: string): string[] {
   switch (tabId) {
     case 'tasks':
-      return ['remark', 'remark_ja'];
+      return ['remark'];
     case 'screen_list':
     case 'function_list':
     case 'test_case':
@@ -239,7 +239,7 @@ const bilingualRowFieldMap: Record<string, Record<string, string>> = {
   tasks: {
     epic: 'epic_ja',
     task: 'task_ja',
-    // remark / remark_ja are separate columns on the Tasks sheet — do not map here
+    remark: 'remark_ja',
   },
   test_case: {
     category: 'category_ja',
@@ -290,6 +290,23 @@ export function getImportMappingTargetsForTab(tab: SheetTab): { key: string; lab
     }
   }
 
+  return out;
+}
+
+/** Columns included in CSV/PDF export (sheet columns plus virtual `*_ja` fields not listed as their own column). */
+export function getExportColumnsForTab(tab: SheetTab): { key: string; label: string }[] {
+  const out: { key: string; label: string }[] = [];
+  const seen = new Set<string>();
+  for (const c of tab.columns) {
+    if (seen.has(c.key)) continue;
+    seen.add(c.key);
+    out.push({ key: c.key, label: c.label });
+    const jaKey = getBilingualRowFieldKey(tab.id, c.key);
+    if (jaKey && !seen.has(jaKey) && !tab.columns.some((col) => col.key === jaKey)) {
+      seen.add(jaKey);
+      out.push({ key: jaKey, label: `${c.label} (JA)` });
+    }
+  }
   return out;
 }
 
@@ -421,10 +438,9 @@ export const sheetTabs: SheetTab[] = [
       col('deadline', 'Deadline', '期限', 120, 'date', true),
       col('completed_date', 'Done At', '完了日', 120, 'date', true),
       col('completion_pm', 'PM Check', 'PM確認', 100, 'select', true, ['', 'Check']),
-      col('remark', 'Remark (EN)', '備考（英語）', 250, 'longtext', true),
-      col('remark_ja', 'Remark (JA)', '備考（日本語）', 250, 'longtext', true),
+      col('remark', 'Remark', '備考', 250, 'longtext', true),
     ],
-    guestEditableColumns: ['remark', 'remark_ja'],
+    guestEditableColumns: ['remark'],
     pmCanAddRows: true,
   },
   {

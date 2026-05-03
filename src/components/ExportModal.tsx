@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { SheetTab, SheetRow } from '@/types';
 import { X, FileText, Table, Download, Check } from 'lucide-react';
+import { getExportColumnsForTab } from '@/lib/data';
 
 interface Props {
   tab: SheetTab;
@@ -17,8 +18,9 @@ export function ExportModal({ tab, rows, onClose }: Props) {
     setExporting(true);
 
     if (format === 'csv') {
-      const headers = tab.columns.map(c => c.label);
-      const csvRows = rows.map(r => tab.columns.map(c => r[c.key] ?? ''));
+      const cols = getExportColumnsForTab(tab);
+      const headers = cols.map((c) => c.label);
+      const csvRows = rows.map((r) => cols.map((c) => r[c.key] ?? ''));
       const bom = '\uFEFF';
       const csvContent = bom + [headers, ...csvRows].map(row =>
         row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')
@@ -87,7 +89,7 @@ export function ExportModal({ tab, rows, onClose }: Props) {
           <div className="bg-surface-800 rounded-xl p-4 border border-surface-700">
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-300">Columns</span>
-              <span className="text-xs text-gray-500">{tab.columns.length} columns</span>
+              <span className="text-xs text-gray-500">{getExportColumnsForTab(tab).length} columns</span>
             </div>
             <div className="pt-2 mt-2 border-t border-surface-700">
               <span className="text-xs text-gray-500">{rows.length} rows will be exported</span>
