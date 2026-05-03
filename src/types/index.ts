@@ -59,7 +59,13 @@ export interface SheetRow {
   [key: string]: string | number | boolean | null | undefined;
 }
 
-export type ImportRowStatus = 'pass' | 'duplicate' | 'conflict' | 'duplicate_in_file';
+export type ImportRowStatus =
+  | 'pass'
+  | 'duplicate'
+  | 'conflict'
+  | 'duplicate_in_file'
+  | 'merge'
+  | 'no_match';
 
 export interface ImportPreviewRow extends SheetRow {
   previewStatus: ImportRowStatus;
@@ -127,6 +133,8 @@ export interface ImportValidationResult {
   previewRows: SheetRow[]; // Rows with no conflicts, ready to import
   totalRows: number;
   duplicateCount: number;
+  /** Rows whose code did not match any existing row (merge-by-code mode only). */
+  noMatchCount: number;
 }
 
 /**
@@ -139,6 +147,9 @@ export interface ImportValidationPreview {
   columnMapping: Record<string, string>;
   totalRows: number;
   duplicateCount: number;
+  noMatchCount: number;
+  /** When true, finalize merges each row onto an existing DB row with the same business code (e.g. Japanese-only columns). */
+  mergeIntoExistingByCode: boolean;
 }
 
 /** Result from finalizing import after conflict resolution */

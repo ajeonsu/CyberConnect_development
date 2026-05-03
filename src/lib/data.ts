@@ -293,6 +293,81 @@ export function getImportMappingTargetsForTab(tab: SheetTab): { key: string; lab
   return out;
 }
 
+/**
+ * Japanese (and common JP export) column headers → sheet `key` for batch-import auto-suggest.
+ * Use when `labelJa` in the column definition does not match the file (vendor-specific wording).
+ */
+const IMPORT_HEADER_SYNONYMS: Record<string, Record<string, string>> = {
+  function_list: {
+    コード: 'function_code',
+    コード番号: 'function_code',
+    機能ＩＤ: 'function_code',
+    機能id: 'function_code',
+    ユーザー区分: 'user_category_ja',
+    大カテゴリ: 'main_category_ja',
+    中カテゴリ: 'subcategory_ja',
+    画面コード: 'screen_code',
+    画面ＩＤ: 'screen_code',
+    機能詳細: 'function_details_ja',
+    工数見積り: 'effort',
+    工数見積もり: 'effort',
+    工数: 'effort',
+  },
+  screen_list: {
+    コード: 'screen_code',
+    画面コード: 'screen_code',
+    画面ＩＤ: 'screen_code',
+    画面名: 'screen_name_ja',
+    ユーザー区分: 'user_category_ja',
+    大項目: 'major_item_ja',
+    中項目: 'medium_item_ja',
+    概要: 'overview_ja',
+  },
+  tasks: {
+    コード: 'task_code',
+    タスクコード: 'task_code',
+    タスクＩＤ: 'task_code',
+    タスクid: 'task_code',
+    タスク名: 'task_ja',
+    備考: 'remark_ja',
+  },
+};
+
+function normalizeImportHeader(s: string): string {
+  return s.normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Resolve a single spreadsheet column header to a sheet field key using Japanese labels,
+ * synonyms, and bilingual `_ja` preference when the header matches `labelJa`.
+ */
+export function matchJapaneseImportHeaderToKey(tab: SheetTab, excelColumnHeader: string): string | null {
+  const raw = normalizeImportHeader(excelColumnHeader);
+  if (!raw) return null;
+  const rawLower = raw.toLowerCase();
+
+  const synonyms = IMPORT_HEADER_SYNONYMS[tab.id];
+  if (synonyms) {
+    for (const [jpHeader, key] of Object.entries(synonyms)) {
+      const n = normalizeImportHeader(jpHeader);
+      if (raw === n || rawLower === n.toLowerCase()) {
+        return key;
+      }
+    }
+  }
+
+  for (const c of tab.columns) {
+    const lja = c.labelJa ? normalizeImportHeader(c.labelJa) : '';
+    if (!lja) continue;
+    if (raw === lja || rawLower === lja.toLowerCase()) {
+      const jaKey = getBilingualRowFieldKey(tab.id, c.key);
+      return jaKey ?? c.key;
+    }
+  }
+
+  return null;
+}
+
 /** Columns included in CSV/PDF export (sheet columns plus virtual `*_ja` fields not listed as their own column). */
 export function getExportColumnsForTab(tab: SheetTab): { key: string; label: string }[] {
   const out: { key: string; label: string }[] = [];
@@ -611,6 +686,13 @@ export const translations: Record<string, string> = {
   'Importing rows…': 'インポート処理中…',
   'Reading file…': 'ファイルを読み込んでいます…',
   'Validating import on server…': 'サーバーで内容を確認しています…',
+  'Merge into existing rows (match by code)': '既存行にマージ（コードで照合）',
+  'Use this when uploading a translation or extra columns for rows you already imported. Each row must match an existing code (e.g. FNC-018).':
+    '既にインポートした行に対する翻訳や追加列をアップロードする場合に使用します。各行は既存のコード（例: FNC-018）と一致する必要があります。',
+  'Rows to update (merge)': '更新予定（マージ）',
+  'No matching code in sheet': 'シートに該当コードなし',
+  'Merge mode: rows with a green/purple highlight update existing records; grey rows have no matching code and will be skipped.':
+    'マージモード: 緑/紫の行は既存レコードを更新します。灰色の行はコードが見つからずスキップされます。',
   'Saving rows to database…': 'データベースに保存しています…',
   'Saving import and updating this sheet…': '保存してシートを更新しています…',
   'Import succeeded': 'インポート成功',
@@ -620,6 +702,7 @@ export const translations: Record<string, string> = {
   'This may take a moment for large files.': '大きいファイルの場合、少し時間がかかることがあります。',
   'Import Results': 'インポート結果',
   'Rows in File': 'ファイル内の行',
+  'Ready to import': 'インポート対象',
   'Uploaded': 'アップロード済み',
   'Duplicates': '重複',
   'Not Uploaded': '未アップロード',

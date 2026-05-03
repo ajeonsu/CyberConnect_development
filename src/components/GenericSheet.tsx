@@ -84,6 +84,8 @@ export function GenericSheet({
   const [importColumnMapping, setImportColumnMapping] = useState<Record<string, string>>({});
   const [importTotalRows, setImportTotalRows] = useState(0);
   const [importDuplicateCount, setImportDuplicateCount] = useState(0);
+  const [importNoMatchCount, setImportNoMatchCount] = useState(0);
+  const [importMergeIntoExistingByCode, setImportMergeIntoExistingByCode] = useState(false);
   const [showConflictResolver, setShowConflictResolver] = useState(false);
   const [showImportResults, setShowImportResults] = useState(false);
   const [importResults, setImportResults] = useState<{ successful: SheetRow[]; failed: any[] }>({ successful: [], failed: [] });
@@ -174,6 +176,8 @@ export function GenericSheet({
     setImportColumnMapping({});
     setImportTotalRows(0);
     setImportDuplicateCount(0);
+    setImportNoMatchCount(0);
+    setImportMergeIntoExistingByCode(false);
     setImportResults({ successful: [], failed: [] });
     setImportSaving(false);
   };
@@ -182,6 +186,8 @@ export function GenericSheet({
     setImportColumnMapping(result.columnMapping);
     setImportTotalRows(result.totalRows);
     setImportDuplicateCount(result.duplicateCount);
+    setImportNoMatchCount(result.noMatchCount);
+    setImportMergeIntoExistingByCode(result.mergeIntoExistingByCode);
     setImportConflicts(result.conflicts);
     setImportAllRows(result.allRows);
     setImportPreviewRows(result.previewRows);
@@ -199,7 +205,9 @@ export function GenericSheet({
 
     setImportSaving(true);
     try {
-      const result = await finalizeImportRows(project?.id || '', tab.id, importPreviewRows, []);
+      const result = await finalizeImportRows(project?.id || '', tab.id, importPreviewRows, [], {
+        mergeIntoExistingByCode: importMergeIntoExistingByCode,
+      });
       setImportResults(result);
       if (project?.id) {
         try {
@@ -593,6 +601,9 @@ export function GenericSheet({
           rowsToImportCount={importPreviewRows.length}
           duplicateCount={importDuplicateCount}
           conflictCount={importConflicts.length}
+          noMatchCount={importNoMatchCount}
+          mergeIntoExistingByCode={importMergeIntoExistingByCode}
+          language={language}
           onBack={() => {
             setShowImportPreview(false);
             setShowImportModal(true);

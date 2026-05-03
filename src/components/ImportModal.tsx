@@ -51,7 +51,12 @@ export function ImportModal({
 
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      const workbook = isCsv
+        ? XLSX.read(
+            new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(arrayBuffer)).replace(/^\ufeff/, ''),
+            { type: 'string' }
+          )
+        : XLSX.read(arrayBuffer, { type: 'array' });
       
       // Get first sheet
       const sheetName = workbook.SheetNames[0];

@@ -1,11 +1,14 @@
 import { Eye, AlertTriangle, X } from 'lucide-react';
 import type { SheetTab, ImportPreviewRow } from '@/types';
+import { translate, type Language } from '@/lib/data';
 
 const rowStyles: Record<ImportPreviewRow['previewStatus'], string> = {
   pass: 'bg-emerald-500/10 hover:bg-emerald-500/15 border-emerald-500/20',
   duplicate: 'bg-amber-500/10 hover:bg-amber-500/15 border-amber-500/20',
   conflict: 'bg-red-500/10 hover:bg-red-500/15 border-red-500/20',
   duplicate_in_file: 'bg-orange-500/10 hover:bg-orange-500/15 border-orange-500/20',
+  merge: 'bg-violet-500/10 hover:bg-violet-500/15 border-violet-500/25',
+  no_match: 'bg-slate-600/15 hover:bg-slate-600/20 border-slate-500/20',
 };
 
 interface Props {
@@ -16,6 +19,10 @@ interface Props {
   rowsToImportCount: number;
   duplicateCount: number;
   conflictCount: number;
+  /** Merge-by-code preview: rows whose code is missing on the sheet. */
+  noMatchCount?: number;
+  mergeIntoExistingByCode?: boolean;
+  language?: Language;
   onBack: () => void;
   onContinue: () => void;
   onClose: () => void;
@@ -28,10 +35,14 @@ export function ImportPreviewModal({
   rowsToImportCount,
   duplicateCount,
   conflictCount,
+  noMatchCount = 0,
+  mergeIntoExistingByCode = false,
+  language = 'en',
   onBack,
   onContinue,
   onClose,
 }: Props) {
+  const mergeRowCount = rows.filter((r) => r.previewStatus === 'merge').length;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={onClose}>
       <div className="bg-surface-900 border border-surface-700 rounded-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col animate-fade-in shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -51,24 +62,50 @@ export function ImportPreviewModal({
         </div>
 
         <div className="flex-1 overflow-auto p-6 space-y-6">
-          <div className="grid grid-cols-4 gap-4">
+          <div
+            className={`grid gap-4 ${mergeIntoExistingByCode ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6' : 'grid-cols-4'}`}
+          >
             <div className="p-4 bg-surface-800 rounded-lg border border-surface-700">
-              <p className="text-xs text-gray-500 mb-1">Rows in File</p>
+              <p className="text-xs text-gray-500 mb-1">{translate('Rows in File', language)}</p>
               <p className="text-2xl font-semibold text-white">{totalRows}</p>
             </div>
             <div className="p-4 bg-surface-800 rounded-lg border border-surface-700">
-              <p className="text-xs text-gray-500 mb-1">Ready to import</p>
+              <p className="text-xs text-gray-500 mb-1">{translate('Ready to import', language)}</p>
               <p className="text-2xl font-semibold text-emerald-400">{rowsToImportCount}</p>
             </div>
+            {mergeIntoExistingByCode && (
+              <div className="p-4 bg-surface-800 rounded-lg border border-violet-500/30">
+                <p className="text-xs text-gray-500 mb-1">{translate('Rows to update (merge)', language)}</p>
+                <p className="text-2xl font-semibold text-violet-300">{mergeRowCount}</p>
+              </div>
+            )}
             <div className="p-4 bg-surface-800 rounded-lg border border-surface-700">
-              <p className="text-xs text-gray-500 mb-1">Duplicates</p>
+              <p className="text-xs text-gray-500 mb-1">{translate('Duplicates', language)}</p>
               <p className="text-2xl font-semibold text-amber-400">{duplicateCount}</p>
             </div>
             <div className="p-4 bg-surface-800 rounded-lg border border-surface-700">
               <p className="text-xs text-gray-500 mb-1">Conflicts</p>
               <p className="text-2xl font-semibold text-red-400">{conflictCount}</p>
             </div>
+            {mergeIntoExistingByCode && (
+              <div className="p-4 bg-surface-800 rounded-lg border border-slate-600/50">
+                <p className="text-xs text-gray-500 mb-1">{translate('No matching code in sheet', language)}</p>
+                <p className="text-2xl font-semibold text-slate-400">{noMatchCount}</p>
+              </div>
+            )}
           </div>
+
+          {mergeIntoExistingByCode && (
+            <div className="p-4 rounded-lg border border-violet-500/25 bg-violet-500/10 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-violet-300 mt-0.5 shrink-0" />
+              <p className="text-xs text-violet-100/90">
+                {translate(
+                  'Merge mode: rows with a green/purple highlight update existing records; grey rows have no matching code and will be skipped.',
+                  language
+                )}
+              </p>
+            </div>
+          )}
 
           {conflictCount > 0 && (
             <div className="p-4 rounded-lg border border-amber-500/30 bg-amber-500/10 flex items-start gap-3">

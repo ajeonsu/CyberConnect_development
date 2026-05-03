@@ -2,7 +2,14 @@ import { useState, useMemo } from 'react';
 import { ChevronRight, X, Loader } from 'lucide-react';
 import type { SheetTab, SheetRow, ImportValidationPreview } from '@/types';
 import { validateAndMapImportRows } from '@/actions/rows';
-import { getImportMappingTargetsForTab, translate, type Language } from '@/lib/data';
+import {
+  getImportMappingTargetsForTab,
+  matchJapaneseImportHeaderToKey,
+  translate,
+  type Language,
+} from '@/lib/data';
+
+const TABS_WITH_MERGE_BY_CODE = new Set(['function_list', 'screen_list', 'tasks']);
 
 interface Props {
   tab: SheetTab;
@@ -28,8 +35,11 @@ export function ColumnMappingUI({
   onValidatingChange,
 }: Props) {
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
+  const [mergeIntoExistingByCode, setMergeIntoExistingByCode] = useState(false);
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState('');
+
+  const mergeSupported = TABS_WITH_MERGE_BY_CODE.has(tab.id);
 
   const sheetColumns = useMemo(() => getImportMappingTargetsForTab(tab), [tab]);
 
@@ -47,6 +57,12 @@ export function ColumnMappingUI({
       if (!match) {
         const underscored = excelLower.replace(/\s+/g, '_');
         match = sheetColumns.find((sc) => sc.key.toLowerCase() === underscored);
+      }
+      if (!match) {
+        const jaKey = matchJapaneseImportHeaderToKey(tab, raw);
+        if (jaKey) {
+          match = sheetColumns.find((sc) => sc.key === jaKey);
+        }
       }
       const wantsJa =
         /\(ja\)|（ja）|_ja\b|\bjapanese\b|日本語|（日本語）|  ja\s*$/i.test(raw);
@@ -101,7 +117,10 @@ export function ColumnMappingUI({
         projectId,
         tab.id,
         plainRows,
-        columnMapping
+        columnMapping,
+        mergeSupported && mergeIntoExistingByCode
+          ? { mergeIntoExistingByCode: true }
+          : undefined
       );
 
       onMappingComplete({
@@ -111,6 +130,8 @@ export function ColumnMappingUI({
         columnMapping,
         totalRows: result.totalRows,
         duplicateCount: result.duplicateCount,
+        noMatchCount: result.noMatchCount,
+        mergeIntoExistingByCode: mergeSupported && mergeIntoExistingByCode,
       });
     } catch (err: any) {
       setError(err.message || 'Validation failed');
@@ -152,6 +173,28 @@ export function ColumnMappingUI({
             <div className="p-3 mb-4 bg-red-500/10 border border-red-500/30 rounded-lg">
               <p className="text-sm text-red-400">{error}</p>
             </div>
+          )}
+
+          {mergeSupported && (
+            <label className="flex items-start gap-3 p-4 mb-6 rounded-xl border border-surface-700 bg-surface-950/40 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={mergeIntoExistingByCode}
+                onChange={(e) => setMergeIntoExistingByCode(e.target.checked)}
+                className="mt-1 rounded border-surface-600 text-brand-500 focus:ring-brand-500/40"
+              />
+              <span>
+                <span className="block text-sm font-medium text-gray-200">
+                  {translate('Merge into existing rows (match by code)', language)}
+                </span>
+                <span className="block text-xs text-gray-500 mt-1">
+                  {translate(
+                    'Use this when uploading a translation or extra columns for rows you already imported. Each row must match an existing code (e.g. FNC-018).',
+                    language
+                  )}
+                </span>
+              </span>
+            </label>
           )}
 
           <div className="grid grid-cols-3 gap-4 mb-6">

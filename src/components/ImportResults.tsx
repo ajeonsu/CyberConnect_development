@@ -2,6 +2,21 @@ import { X, CheckCircle, AlertCircle, AlertTriangle } from 'lucide-react';
 import type { SheetRow } from '@/types';
 import { translate, type Language } from '@/lib/data';
 
+function formatFailReason(reason: unknown): string {
+  if (reason == null) return 'Unknown error';
+  if (typeof reason === 'string') return reason;
+  if (reason instanceof Error) return reason.message || 'Unknown error';
+  if (typeof reason === 'object' && reason !== null && 'message' in reason) {
+    const m = (reason as { message: unknown }).message;
+    return formatFailReason(m);
+  }
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
+}
+
 interface Props {
   successful: SheetRow[];
   failed: Array<{ rowData: Record<string, unknown>; reason: string }>;
@@ -176,7 +191,7 @@ export function ImportResults({
                 {failed.map((fail, idx) => (
                   <div key={idx} className="p-3 bg-red-500/10 rounded border border-red-500/30 text-xs">
                     <p className="text-red-300 font-medium mb-1">Row {idx + 1}</p>
-                    <p className="text-red-400">{fail.reason}</p>
+                    <p className="text-red-400">{formatFailReason(fail.reason)}</p>
                   </div>
                 ))}
               </div>

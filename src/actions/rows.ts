@@ -7,6 +7,7 @@ import { SheetRow, ImportValidationResult, ImportFinalResult, ImportConflict, Co
 import { revalidatePath } from 'next/cache'
 import { SupabaseClient } from '@supabase/supabase-js'
 import { computeNextTaskCode } from '@/lib/taskCodes'
+import { recoverUtf8MisreadAsLatin1 } from '@/lib/importSheet'
 
 /**
  * Server-side actions for managing Sheet Rows across all tables.
@@ -25,6 +26,9 @@ const TABLE_MAP: Record<string, string> = {
   'non_func': 'non_func_rows',
   'app_list': 'api_list_rows'
 }
+
+/** Batch size for import finalize — fewer round trips; on failure a chunk falls back to row-by-row. */
+const IMPORT_UPSERT_CHUNK_SIZE = 75
 
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -116,6 +120,89 @@ function canonicalPhaseTypeValue(val: unknown): string | null {
     actual_performance: 'actual_performance',
   }
   return alias[lower] ?? null
+}
+
+/** Valid `function_status` enum labels used by the app / DB. */
+const FUNCTION_LIST_STATUS_CANONICAL = new Set([
+  'Not started',
+  'In progress',
+  'Completed',
+  'Need to be checked',
+])
+
+/**
+ * Map spreadsheet status (JP/EN, bilingual cells, mojibake) to `function_status`.
+ */
+function canonicalFunctionListStatusValue(val: unknown): string {
+  let raw = String(val ?? '')
+    .trim()
+    .replace(/\u00a0/g, ' ')
+    .replace(/\u200b/g, '')
+  raw = recoverUtf8MisreadAsLatin1(raw)
+  raw = raw
+    .replace(/\s*,\s*Fixing\s*$/i, '')
+    .replace(/\s+Fixing\s*$/i, '')
+    .trim()
+  if (!raw) return 'Need to be checked'
+
+  if (FUNCTION_LIST_STATUS_CANONICAL.has(raw)) {
+    if (raw === 'Not started') return 'Need to be checked'
+    return raw
+  }
+
+  const lower = raw.toLowerCase().replace(/\s+/g, ' ').replace(/…/g, '...')
+
+  // Google Sheets dropdown / badge truncation (e.g. grey pill "Need to be c...")
+  if (/^need to be c(?:hecked)?/.test(lower) || lower.startsWith('need to be checked')) {
+    return 'Need to be checked'
+  }
+
+  const enAlias: Record<string, string> = {
+    'not started': 'Need to be checked',
+    'in progress': 'In progress',
+    completed: 'Completed',
+    'need to be checked': 'Need to be checked',
+  }
+  if (enAlias[lower]) return enAlias[lower]
+
+  // Bilingual cell as exported from sheets (JP + EN)
+  if (/修正中\s*fixing/i.test(raw) || /^修正中$/.test(raw.trim())) return 'In progress'
+
+  if (/修正中|修正/.test(raw)) return 'In progress'
+  if (/完了|完成/.test(raw)) return 'Completed'
+  if (/要確認|未着手/.test(raw)) return 'Need to be checked'
+
+  return 'Need to be checked'
+}
+
+function normalizeFunctionListCheckField(val: unknown): string | null {
+  const s = String(val ?? '').trim()
+  if (!s) return null
+  const low = s.toLowerCase()
+  if (low === 'done' || s === '完了') return 'Done'
+  return null
+}
+
+/** Readable message from Supabase / PostgREST error objects (avoids "[object Object]"). */
+function extractPostgrestErrorMessage(err: unknown): string {
+  if (err == null) return 'Unknown error'
+  if (typeof err === 'string') return err
+  if (err instanceof Error && err.message) return err.message
+  const o = err as {
+    message?: unknown
+    details?: unknown
+    hint?: unknown
+  }
+  const parts: string[] = []
+  if (typeof o.message === 'string' && o.message) parts.push(o.message)
+  if (typeof o.details === 'string' && o.details) parts.push(o.details)
+  if (typeof o.hint === 'string' && o.hint) parts.push(o.hint)
+  if (parts.length > 0) return parts.join(' — ')
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return 'Database error'
+  }
 }
 
 function sanitizeRowData(row: Record<string, unknown>, tableName: string) {
@@ -231,13 +318,22 @@ function sanitizeRowData(row: Record<string, unknown>, tableName: string) {
       const p = canonicalPhaseTypeValue(clean.phase)
       clean.phase = p
     }
-    // Ensure enums aren't invalid empty strings
-    // AND map 'Not started' (frontend) to 'Need to be checked' (DB enum default)
-    if (clean.status === '' || clean.status === 'Not started') {
-      clean.status = 'Need to be checked';
+    if (clean.status !== undefined && clean.status !== null && String(clean.status).trim() !== '') {
+      clean.status = canonicalFunctionListStatusValue(clean.status)
+    } else {
+      clean.status = 'Need to be checked'
     }
-    if (clean.completion_dev === '') clean.completion_dev = null;
-    if (clean.completion_client === '') clean.completion_client = null;
+    if (clean.status === '' || clean.status === 'Not started') {
+      clean.status = 'Need to be checked'
+    }
+    if (clean.completion_dev !== undefined && clean.completion_dev !== null) {
+      clean.completion_dev = normalizeFunctionListCheckField(clean.completion_dev)
+    }
+    if (clean.completion_client !== undefined && clean.completion_client !== null) {
+      clean.completion_client = normalizeFunctionListCheckField(clean.completion_client)
+    }
+    if (clean.completion_dev === '') clean.completion_dev = null
+    if (clean.completion_client === '') clean.completion_client = null
   }
 
   if (tableName === 'api_list_rows') {
@@ -374,21 +470,23 @@ export async function getNextTaskCodeAction(projectId: string): Promise<string> 
 }
 
 function mapUniqueViolationError(tableName: string, err: unknown): Error {
-  const e = err as { code?: string; message?: string }
+  const fullText = extractPostgrestErrorMessage(err).toLowerCase()
+  const e = err as { code?: string }
   const code = e?.code ?? ''
-  const msg = (e?.message ?? '').toLowerCase()
   const isDup =
-    code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint')
-  if (tableName === 'task_rows' && isDup && msg.includes('idx_task_code_project')) {
+    code === '23505' ||
+    fullText.includes('duplicate key') ||
+    fullText.includes('unique constraint')
+  if (tableName === 'task_rows' && isDup && fullText.includes('idx_task_code_project')) {
     return new Error('duplicate_task_code')
   }
-  if (tableName === 'function_list_rows' && isDup && msg.includes('idx_function_code_project')) {
+  if (tableName === 'function_list_rows' && isDup && fullText.includes('idx_function_code_project')) {
     return new Error('Duplicate function code for this project')
   }
-  if (tableName === 'screen_list_rows' && isDup && msg.includes('idx_screen_code_project')) {
+  if (tableName === 'screen_list_rows' && isDup && fullText.includes('idx_screen_code_project')) {
     return new Error('Duplicate screen code for this project')
   }
-  return err instanceof Error ? err : new Error(String(err))
+  return new Error(extractPostgrestErrorMessage(err))
 }
 
 export async function getSheetRowsAction(projectId: string, tabId: string): Promise<SheetRow[]> {
@@ -513,6 +611,15 @@ export async function deleteSheetRowsBatchAction(
   revalidatePath('/')
 }
 
+export type ValidateImportRowsOptions = {
+  /** Match each row to an existing DB row by business code and merge imported cells (e.g. Japanese translations). */
+  mergeIntoExistingByCode?: boolean
+}
+
+export type FinalizeImportRowsOptions = {
+  mergeIntoExistingByCode?: boolean
+}
+
 /**
  * Validate and map Excel rows to sheet rows, detecting conflicts
  * Returns preview rows and list of conflicts to resolve
@@ -521,7 +628,8 @@ export async function validateAndMapImportRows(
   projectId: string,
   tabId: string,
   excelRows: Record<string, unknown>[],
-  columnMapping: Record<string, string>
+  columnMapping: Record<string, string>,
+  options?: ValidateImportRowsOptions
 ): Promise<ImportValidationResult> {
   const tableName = TABLE_MAP[tabId]
   if (!tableName) throw new Error(`Unknown table for tab: ${tabId}`)
@@ -532,6 +640,13 @@ export async function validateAndMapImportRows(
   const supabase = await createClient()
   if (!(await verifyProjectAccess(supabase, projectId))) throw new Error('Forbidden')
   await assertCanMutateTeamSheets(supabase, projectId)
+
+  const businessField = getBusinessCodeField(tableName)
+  const mergeMode = Boolean(options?.mergeIntoExistingByCode)
+
+  if (mergeMode && !businessField) {
+    throw new Error('Merge into existing rows is not available for this sheet.')
+  }
 
   // Map Excel rows to sheet rows using column mapping
   const mappedRows = excelRows.map((excelRow, idx) => {
@@ -551,10 +666,18 @@ export async function validateAndMapImportRows(
 
   const comparableKeys = [...new Set(Object.values(columnMapping).filter((key): key is string => !!key))]
 
-  // Find code field if exists (task_code, screen_code, function_code, or code)
-  const codeField = ['task_code', 'screen_code', 'function_code', 'code'].find((field) => {
-    return mappedRows.some((row) => normalizeComparableValue(row[field]) !== '')
-  }) || 'code'
+  const resolvedCodeField =
+    mergeMode && businessField
+      ? businessField
+      : businessField !== null &&
+          mappedRows.some(
+            (row) =>
+              normalizeComparableValue((row as Record<string, unknown>)[businessField] as unknown) !== ''
+          )
+        ? businessField
+        : ['task_code', 'screen_code', 'function_code', 'code'].find((field) => {
+            return mappedRows.some((row) => normalizeComparableValue(row[field]) !== '')
+          }) || 'code'
 
   // Check for exact duplicates and code conflicts
   const conflicts: ImportConflict[] = []
@@ -567,10 +690,10 @@ export async function validateAndMapImportRows(
     .from(tableName)
     .select('*')
     .eq('project_id', projectId)
-  
+
   if (dbRows) {
-    (dbRows as SheetRow[]).forEach(row => {
-      const codeVal = String(row[codeField] || '')
+    ;(dbRows as SheetRow[]).forEach((row) => {
+      const codeVal = String((row as Record<string, unknown>)[resolvedCodeField] ?? '')
       if (codeVal) {
         existingRows[codeVal] = row
       }
@@ -587,6 +710,8 @@ export async function validateAndMapImportRows(
   // Detect conflicts and preview rows
   let exactDuplicateCount = 0
   let duplicateInFileCount = 0
+  let noMatchCount = 0
+
   mappedRows.forEach((row, idx) => {
     const exactSignature = buildComparableSignature(row as Record<string, unknown>, comparableKeys)
     if (exactSignature && existingExactRows[exactSignature]) {
@@ -606,14 +731,26 @@ export async function validateAndMapImportRows(
       firstIndexByFileSignature.set(exactSignature, idx)
     }
 
-    const codeVal = normalizeComparableValue(row[codeField])
+    const codeVal = normalizeComparableValue((row as Record<string, unknown>)[resolvedCodeField])
+
+    if (mergeMode) {
+      if (codeVal && existingRows[codeVal]) {
+        previewRows.push(row)
+        allRows.push({ ...row, previewStatus: 'merge' })
+        return
+      }
+      noMatchCount += 1
+      allRows.push({ ...row, previewStatus: 'no_match' })
+      return
+    }
+
     if (codeVal && existingRows[codeVal]) {
       conflicts.push({
         excelRowIndex: idx,
         excelRow: row,
         existingRow: existingRows[codeVal],
         codeValue: codeVal,
-        codeField: codeField,
+        codeField: resolvedCodeField,
       })
       allRows.push({ ...row, previewStatus: 'conflict' })
     } else {
@@ -628,6 +765,7 @@ export async function validateAndMapImportRows(
     previewRows,
     totalRows: excelRows.length,
     duplicateCount: conflicts.length + exactDuplicateCount + duplicateInFileCount,
+    noMatchCount,
   }
 }
 
@@ -639,7 +777,8 @@ export async function finalizeImportRows(
   projectId: string,
   tabId: string,
   rowsToImport: SheetRow[],
-  conflictResolutions: ConflictChoice[]
+  conflictResolutions: ConflictChoice[],
+  options?: FinalizeImportRowsOptions
 ): Promise<ImportFinalResult> {
   const tableName = TABLE_MAP[tabId]
   if (!tableName) throw new Error(`Unknown table for tab: ${tabId}`)
@@ -671,51 +810,130 @@ export async function finalizeImportRows(
 
   let pendingTaskCodes = existingRowsArray.map((r) => String(r.task_code ?? ''))
 
-  // Import preview rows (no conflicts)
-  for (const row of rowsToImport) {
-    try {
-      const cleanedData = sanitizeRowData(row as Record<string, unknown>, tableName)
+  const allowedDevIds =
+    tableName === 'task_rows'
+      ? await loadTeamProjectDeveloperIds(supabase, projectId)
+      : null
 
-      const comparableKeys = Object.keys(cleanedData).filter(
-        (key) => key !== 'id' && key !== 'project_id' && key !== 'created_at' && key !== 'updated_at'
-      )
-      const exactSignature = buildComparableSignature(cleanedData, comparableKeys)
+  /** Rows prepared in order (sanitize + codes); claimedCodes updated per row like single-row import. */
+  const preparedPayloads: Record<string, unknown>[] = []
 
-      if (
-        exactSignature &&
-        existingRowsArray.some(
-          (existingRow) =>
-            buildComparableSignature(existingRow as Record<string, unknown>, comparableKeys) === exactSignature
-        )
-      ) {
-        continue
-      }
+  const mergeMode =
+    Boolean(options?.mergeIntoExistingByCode) && getBusinessCodeField(tableName) !== null
 
-      if (tableName === 'task_rows') {
-        const tc = String(cleanedData.task_code ?? '').trim()
-        if (!tc) {
-          cleanedData.task_code = computeNextTaskCode(pendingTaskCodes)
+  if (mergeMode) {
+    const codeField = getBusinessCodeField(tableName)!
+    for (const row of rowsToImport) {
+      try {
+        const importRaw = { ...(row as Record<string, unknown>) }
+        delete importRaw.id
+        const code = normalizeComparableValue(importRaw[codeField])
+        if (!code) {
+          failed.push({
+            rowData: row as Record<string, unknown>,
+            reason: `Missing ${codeField} — map the code column or turn off merge mode.`,
+          })
+          continue
         }
-        rewriteCodeIfClaimed(tableName, cleanedData, claimedCodes)
-        const finalTc = String(cleanedData.task_code ?? '').trim()
-        pendingTaskCodes = [...pendingTaskCodes, finalTc].filter(Boolean)
-      } else {
-        rewriteCodeIfClaimed(tableName, cleanedData, claimedCodes)
-      }
+        const existing = existingRowsArray.find(
+          (r) => normalizeComparableValue((r as Record<string, unknown>)[codeField]) === code
+        )
+        if (!existing) {
+          failed.push({
+            rowData: row as Record<string, unknown>,
+            reason: `No existing row with ${codeField} "${code}". Upload the primary sheet first or turn off merge mode.`,
+          })
+          continue
+        }
+        const merged = {
+          ...(existing as Record<string, unknown>),
+          ...importRaw,
+          id: existing.id,
+          project_id: projectId,
+        }
+        let cleanedData = sanitizeRowData(merged, tableName)
 
-      // Additional validation for team projects (assignee_id)
-      if (tableName === 'task_rows') {
-        const allowed = await loadTeamProjectDeveloperIds(supabase, projectId)
-        if (allowed !== null) {
+        const comparableKeys = Object.keys(cleanedData).filter(
+          (key) => key !== 'id' && key !== 'project_id' && key !== 'created_at' && key !== 'updated_at'
+        )
+        const exactSignature = buildComparableSignature(cleanedData, comparableKeys)
+        if (
+          exactSignature &&
+          existingRowsArray.some(
+            (existingRow) =>
+              buildComparableSignature(existingRow as Record<string, unknown>, comparableKeys) === exactSignature
+          )
+        ) {
+          continue
+        }
+
+        if (tableName === 'task_rows' && allowedDevIds !== null) {
           const aid = cleanedData.assignee_id
-          if (typeof aid === 'string' && aid && !allowed.includes(aid)) {
+          if (typeof aid === 'string' && aid && !allowedDevIds.includes(aid)) {
+            cleanedData = { ...cleanedData, assignee_id: null }
+          }
+        }
+
+        preparedPayloads.push(cleanedData)
+      } catch (err: any) {
+        failed.push({
+          rowData: row as Record<string, unknown>,
+          reason: err?.message || 'Unknown error',
+        })
+      }
+    }
+  } else {
+    for (const row of rowsToImport) {
+      try {
+        const cleanedData = sanitizeRowData(row as Record<string, unknown>, tableName)
+
+        const comparableKeys = Object.keys(cleanedData).filter(
+          (key) => key !== 'id' && key !== 'project_id' && key !== 'created_at' && key !== 'updated_at'
+        )
+        const exactSignature = buildComparableSignature(cleanedData, comparableKeys)
+
+        if (
+          exactSignature &&
+          existingRowsArray.some(
+            (existingRow) =>
+              buildComparableSignature(existingRow as Record<string, unknown>, comparableKeys) === exactSignature
+          )
+        ) {
+          continue
+        }
+
+        if (tableName === 'task_rows') {
+          const tc = String(cleanedData.task_code ?? '').trim()
+          if (!tc) {
+            cleanedData.task_code = computeNextTaskCode(pendingTaskCodes)
+          }
+          rewriteCodeIfClaimed(tableName, cleanedData, claimedCodes)
+          const finalTc = String(cleanedData.task_code ?? '').trim()
+          pendingTaskCodes = [...pendingTaskCodes, finalTc].filter(Boolean)
+        } else {
+          rewriteCodeIfClaimed(tableName, cleanedData, claimedCodes)
+        }
+
+        if (tableName === 'task_rows' && allowedDevIds !== null) {
+          const aid = cleanedData.assignee_id
+          if (typeof aid === 'string' && aid && !allowedDevIds.includes(aid)) {
             cleanedData.assignee_id = null
           }
         }
+
+        rememberClaimedCode(tableName, cleanedData, claimedCodes)
+        preparedPayloads.push(cleanedData)
+      } catch (err: any) {
+        failed.push({
+          rowData: row,
+          reason: err.message || 'Unknown error',
+        })
       }
+    }
+  }
 
-      rememberClaimedCode(tableName, cleanedData, claimedCodes)
-
+  const upsertRowsOneByOne = async (chunk: Record<string, unknown>[]) => {
+    for (const cleanedData of chunk) {
       const { data, error } = await supabase
         .from(tableName)
         .upsert(cleanedData)
@@ -726,17 +944,28 @@ export async function finalizeImportRows(
         releaseClaimedCode(tableName, cleanedData, claimedCodes)
         failed.push({
           rowData: cleanedData,
-          reason: mapUniqueViolationError(tableName, error).message || 'Database error',
+          reason: mapUniqueViolationError(tableName, error).message || extractPostgrestErrorMessage(error),
         })
-      } else {
+      } else if (data) {
         successful.push(data as SheetRow)
       }
-    } catch (err: any) {
-      failed.push({
-        rowData: row,
-        reason: err.message || 'Unknown error',
-      })
     }
+  }
+
+  for (let i = 0; i < preparedPayloads.length; i += IMPORT_UPSERT_CHUNK_SIZE) {
+    const chunk = preparedPayloads.slice(i, i + IMPORT_UPSERT_CHUNK_SIZE)
+    const { data: batchData, error: batchError } = await supabase
+      .from(tableName)
+      .upsert(chunk)
+      .select()
+
+    if (!batchError && batchData) {
+      const rows = Array.isArray(batchData) ? batchData : [batchData]
+      successful.push(...(rows as SheetRow[]))
+      continue
+    }
+
+    await upsertRowsOneByOne(chunk)
   }
 
   // Process conflict resolutions

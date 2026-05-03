@@ -38,7 +38,7 @@ export function parseWorksheetForImport(worksheet: XLSX.WorkSheet): {
 
     const row: Record<string, unknown> = {};
     for (let c = 0; c < width; c++) {
-      row[uniqueHeaders[c]] = cells[c];
+      row[uniqueHeaders[c]] = normalizeImportedCell(cells[c]);
     }
     rows.push(row);
   }
@@ -57,6 +57,36 @@ function padRow(row: unknown[], width: number): unknown[] {
 function normalizeCell(v: unknown): string {
   if (v === null || v === undefined) return '';
   return String(v).trim();
+}
+
+/**
+ * When UTF-8 text was interpreted as Latin-1/Windows-1252 (common CSV export issue),
+ * recover the original string (e.g. mojibake "ä¿®æ­£ä¸" -> "修正中").
+ */
+export function recoverUtf8MisreadAsLatin1(s: string): string {
+  const t = s.trim();
+  if (!t) return t;
+  // High-bit chars that often indicate mis-decoded UTF-8
+  if (!/[\u0080-\uFFFF]/.test(t)) return t;
+  try {
+    const bytes = new Uint8Array(t.length);
+    for (let i = 0; i < t.length; i++) bytes[i] = t.charCodeAt(i) & 0xff;
+    const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    // Prefer decoded text when it contains CJK or common JP markers
+    if (/[\u3040-\u30ff\u4e00-\u9fff\u3000-\u303f]/.test(decoded) || /修正|完了|確認/.test(decoded)) {
+      return decoded.trim();
+    }
+    if (decoded && decoded !== t && !/�{2,}/.test(decoded)) return decoded.trim();
+  } catch {
+    /* ignore */
+  }
+  return t;
+}
+
+function normalizeImportedCell(v: unknown): unknown {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') return recoverUtf8MisreadAsLatin1(v);
+  return v;
 }
 
 /** Strip BOM from first header when present. */
