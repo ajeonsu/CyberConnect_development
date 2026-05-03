@@ -7,7 +7,13 @@ import { GenericSheet } from '@/components/GenericSheet';
 import { SheetRowDetail } from '@/components/SheetRowDetail';
 import { AddRowDrawer } from '@/components/AddRowDrawer';
 import { ExportModal } from '@/components/ExportModal';
-import { sheetTabs, getCurrentUserProjectSheetRole, getLocalizedProjectName, isTeamAdminOrOwner } from '@/lib/data';
+import {
+  sheetTabs,
+  getCurrentUserProjectSheetRole,
+  getLocalizedProjectName,
+  isTeamAdminOrOwner,
+  isSheetBundleComplete,
+} from '@/lib/data';
 import { useMemo, useEffect, useState } from 'react';
 import type { SheetRow } from '@/types';
 
@@ -47,8 +53,10 @@ export default function ProjectTabPage() {
         setIsFetchingProject(true);
         refreshProject(projectId).finally(() => setIsFetchingProject(false));
       }
-      if (!sheetData[projectId] && !sheetLoadingProjects[projectId]) {
-        refreshSheetData(projectId);
+      const needsFullSync =
+        !isSheetBundleComplete(sheetData[projectId]) && !sheetLoadingProjects[projectId];
+      if (needsFullSync) {
+        void refreshSheetData(projectId);
       }
     }
   }, [projectId, sheetData, sheetLoadingProjects, refreshSheetData, getProjectById, refreshProject]);
@@ -95,7 +103,8 @@ export default function ProjectTabPage() {
     return currentRows.find(r => r.id === selectedRow.id) ?? selectedRow;
   }, [selectedRow, currentRows]);
 
-  const isSheetLoading = !sheetData[projectId] || sheetLoadingProjects[projectId];
+  const isSheetLoading =
+    sheetLoadingProjects[projectId] || !isSheetBundleComplete(sheetData[projectId]);
 
   if (isFetchingProject) {
     return (

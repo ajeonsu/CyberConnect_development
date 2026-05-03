@@ -3,7 +3,7 @@
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/Sidebar';
 import { WorkspaceProvider, useWorkspace } from '@/components/WorkspaceProvider';
-import { sheetTabs } from '@/lib/data';
+import { sheetTabs, isSheetBundleComplete } from '@/lib/data';
 import { Suspense, useCallback, useEffect, useTransition } from 'react';
 import { translate } from '@/lib/data';
 import { updateActiveRoleAction } from '@/actions/auth';
@@ -32,6 +32,8 @@ function TeamRoleLayoutContent({ children }: { children: React.ReactNode }) {
     updateCurrentTeam,
     regenerateCurrentTeamInviteCode,
     sheetData,
+    sheetLoadingProjects,
+    refreshSheetData,
     teamMemberships
   } = useWorkspace();
 
@@ -47,6 +49,13 @@ function TeamRoleLayoutContent({ children }: { children: React.ReactNode }) {
   const activeProjectId = params.id as string | undefined;
   const activeTabId = params.tabId as string | undefined;
   const activeProject = projects.find(p => p.id === activeProjectId) || null;
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    if (sheetLoadingProjects[activeProjectId]) return;
+    if (isSheetBundleComplete(sheetData[activeProjectId])) return;
+    void refreshSheetData(activeProjectId);
+  }, [activeProjectId, sheetData, sheetLoadingProjects, refreshSheetData]);
 
   // Keep server actions (cookies) aligned with the team URL so create/list/assign use the same tenant.
   useEffect(() => {

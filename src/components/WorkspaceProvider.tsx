@@ -41,7 +41,6 @@ interface WorkspaceContextType {
   updateMyProfile: (updates: Partial<Pick<UserProfile, 'name' | 'department' | 'avatar_url'>>) => Promise<void>;
   updateCurrentTeam: (updates: { name?: string }) => Promise<void>;
   regenerateCurrentTeamInviteCode: () => Promise<string>;
-  getTabRowCount: (tabId: string) => number;
   refreshSheetData: (projectId: string) => Promise<void>;
   getProjectById: (id: string) => Project | null;
   refreshProject: (id: string) => Promise<Project | null>;
@@ -491,10 +490,6 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     return p;
   }, []);
 
-  const getTabRowCount = useCallback((tabId: string) => {
-    return 0;
-  }, []);
-
   const updateSheetRow = useCallback(async (projectId: string, tabId: string, rowId: string, key: string, value: string) => {
     const rows = sheetData[projectId]?.[tabId] ?? [];
     const row = rows.find(r => r.id === rowId);
@@ -607,7 +602,6 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     updateMyProfile,
     updateCurrentTeam,
     regenerateCurrentTeamInviteCode,
-    getTabRowCount: (tabId: string) => 0,
     refreshSheetData,
     getProjectById,
     refreshProject,

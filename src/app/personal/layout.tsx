@@ -3,7 +3,7 @@
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/Sidebar';
 import { WorkspaceProvider, useWorkspace } from '@/components/WorkspaceProvider';
-import { sheetTabs } from '@/lib/data';
+import { sheetTabs, isSheetBundleComplete } from '@/lib/data';
 import { Suspense, useCallback, useEffect, useTransition } from 'react';
 import { translate } from '@/lib/data';
 import { updateActiveRoleAction } from '@/actions/auth';
@@ -25,6 +25,8 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
     updateCurrentTeam,
     regenerateCurrentTeamInviteCode,
     sheetData,
+    sheetLoadingProjects,
+    refreshSheetData,
     teamMemberships
   } = useWorkspace();
   const personalTeamSlug = loggedInUser?.activeTeamSlug || teamMemberships[0]?.team?.slug || 'my-team';
@@ -47,6 +49,13 @@ function PersonalLayoutContent({ children }: { children: React.ReactNode }) {
     if (!loggedInUser) return;
     void updateActiveRoleAction('personal');
   }, [loggedInUser?.id]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    if (sheetLoadingProjects[activeProjectId]) return;
+    if (isSheetBundleComplete(sheetData[activeProjectId])) return;
+    void refreshSheetData(activeProjectId);
+  }, [activeProjectId, sheetData, sheetLoadingProjects, refreshSheetData]);
 
   const getTabRowCount = useCallback((tabId: string) => {
     if (!activeProjectId) return 0;

@@ -328,6 +328,26 @@ export function shouldRenderMergedBilingualBlock(tab: SheetTab, colKey: string):
   return !tab.columns.some((c) => c.key === jaKey);
 }
 
+/** Tab ids backed by DB sheet tables (excludes UI-only tabs like master_schedule). */
+export function getDataSheetTabIds(): string[] {
+  return sheetTabs.filter((t) => !t.isSpecialView).map((t) => t.id);
+}
+
+/**
+ * True when every data tab has been fetched for this project (arrays may be empty).
+ * Used so we do not skip a full sync just because dashboard bootstrap loaded tasks/tech_stack only.
+ */
+export function isSheetBundleComplete(
+  bundle: Record<string, unknown> | undefined
+): boolean {
+  if (!bundle) return false;
+  for (const id of getDataSheetTabIds()) {
+    const rows = bundle[id];
+    if (!Array.isArray(rows)) return false;
+  }
+  return true;
+}
+
 export const sheetTabs: SheetTab[] = [
   {
     id: 'purpose',
