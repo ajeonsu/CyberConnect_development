@@ -289,11 +289,16 @@ function mapUniqueViolationError(tableName: string, err: unknown): Error {
   const e = err as { code?: string; message?: string }
   const code = e?.code ?? ''
   const msg = (e?.message ?? '').toLowerCase()
-  const taskDup =
-    tableName === 'task_rows' &&
-    (code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint') || msg.includes('idx_task_code_project'))
-  if (taskDup) {
+  const isDup =
+    code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint')
+  if (tableName === 'task_rows' && isDup && msg.includes('idx_task_code_project')) {
     return new Error('duplicate_task_code')
+  }
+  if (tableName === 'function_list_rows' && isDup && msg.includes('idx_function_code_project')) {
+    return new Error('Duplicate function code for this project')
+  }
+  if (tableName === 'screen_list_rows' && isDup && msg.includes('idx_screen_code_project')) {
+    return new Error('Duplicate screen code for this project')
   }
   return err instanceof Error ? err : new Error(String(err))
 }
@@ -397,6 +402,29 @@ export async function deleteSheetRowAction(tabId: string, projectId: string, row
   revalidatePath('/')
 }
 
+export async function deleteSheetRowsBatchAction(
+  tabId: string,
+  projectId: string,
+  rowIds: string[]
+): Promise<void> {
+  const tableName = TABLE_MAP[tabId]
+  if (!tableName) throw new Error(`Unknown table for tab: ${tabId}`)
+  if (rowIds.length === 0) return
+
+  const supabase = await createClient()
+  if (!(await verifyProjectAccess(supabase, projectId))) throw new Error('Forbidden')
+  await assertCanMutateTeamSheets(supabase, projectId)
+
+  const { error } = await supabase
+    .from(tableName)
+    .delete()
+    .eq('project_id', projectId)
+    .in('id', rowIds)
+
+  if (error) throw error
+  revalidatePath('/')
+}
+
 /**
  * Validate and map Excel rows to sheet rows, detecting conflicts
  * Returns preview rows and list of conflicts to resolve
@@ -465,8 +493,16 @@ export async function validateAndMapImportRows(
     })
   }
 
+  const firstIndexByCode = new Map<string, number>()
+  mappedRows.forEach((row, idx) => {
+    const cv = normalizeComparableValue(row[codeField])
+    if (!cv) return
+    if (!firstIndexByCode.has(cv)) firstIndexByCode.set(cv, idx)
+  })
+
   // Detect conflicts and preview rows
   let exactDuplicateCount = 0
+  let duplicateInFileCount = 0
   mappedRows.forEach((row, idx) => {
     const exactSignature = buildComparableSignature(row as Record<string, unknown>, comparableKeys)
     if (exactSignature && existingExactRows[exactSignature]) {
@@ -475,8 +511,13 @@ export async function validateAndMapImportRows(
       return
     }
 
-    const codeVal = String(row[codeField] || '')
-    
+    const codeVal = normalizeComparableValue(row[codeField])
+    if (codeVal && firstIndexByCode.get(codeVal) !== idx) {
+      duplicateInFileCount += 1
+      allRows.push({ ...row, previewStatus: 'duplicate_in_file' })
+      return
+    }
+
     if (codeVal && existingRows[codeVal]) {
       conflicts.push({
         excelRowIndex: idx,
@@ -497,7 +538,7 @@ export async function validateAndMapImportRows(
     allRows,
     previewRows,
     totalRows: excelRows.length,
-    duplicateCount: conflicts.length + exactDuplicateCount,
+    duplicateCount: conflicts.length + exactDuplicateCount + duplicateInFileCount,
   }
 }
 

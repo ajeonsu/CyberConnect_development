@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { ChevronRight, X, Loader } from 'lucide-react';
 import type { SheetTab, SheetRow, ImportValidationPreview } from '@/types';
 import { validateAndMapImportRows } from '@/actions/rows';
+import { getImportMappingTargetsForTab } from '@/lib/data';
 
 interface Props {
   tab: SheetTab;
@@ -26,22 +27,41 @@ export function ColumnMappingUI({
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState('');
 
-  const sheetColumns = useMemo(() => {
-    return tab.columns.map(c => ({
-      key: c.key,
-      label: c.label,
-      type: c.type,
-    }));
-  }, [tab]);
+  const sheetColumns = useMemo(() => getImportMappingTargetsForTab(tab), [tab]);
 
-  // Try to auto-match columns by name similarity
+  // Try to auto-match columns by name similarity (including JA targets and header hints)
   const suggestMapping = () => {
     const mapping: Record<string, string> = {};
-    excelColumns.forEach(excelCol => {
-      const excelLower = excelCol.toLowerCase();
-      const match = sheetColumns.find(
-        sc => sc.key.toLowerCase() === excelLower || sc.label.toLowerCase() === excelLower
+    excelColumns.forEach((excelCol) => {
+      const raw = excelCol.trim();
+      const excelLower = raw.toLowerCase();
+      let match = sheetColumns.find(
+        (sc) =>
+          sc.key.toLowerCase() === excelLower ||
+          sc.label.toLowerCase() === excelLower
       );
+      if (!match) {
+        const underscored = excelLower.replace(/\s+/g, '_');
+        match = sheetColumns.find((sc) => sc.key.toLowerCase() === underscored);
+      }
+      const wantsJa =
+        /\(ja\)|（ja）|_ja\b|\bjapanese\b|日本語|（日本語）|  ja\s*$/i.test(raw);
+      if (!match && wantsJa) {
+        const stripped = raw
+          .replace(/\([^)]*(ja|日本語)[^)]*\)/gi, '')
+          .replace(/_ja\b/gi, '')
+          .replace(/\bja\b/gi, '')
+          .replace(/日本語|（日本語）/g, '')
+          .trim()
+          .toLowerCase();
+        match = sheetColumns.find((sc) => {
+          if (!sc.key.endsWith('_ja')) return false;
+          const base = tab.columns.find((c) => c.key === sc.key.replace(/_ja$/, ''));
+          if (!base) return false;
+          const bl = base.label.toLowerCase();
+          return stripped.length > 0 && (stripped.includes(bl) || bl.includes(stripped));
+        });
+      }
       if (match) {
         mapping[excelCol] = match.key;
       }
@@ -140,13 +160,15 @@ export function ColumnMappingUI({
 
             {/* Sheet Columns */}
             <div>
-              <h3 className="text-sm font-semibold text-gray-300 mb-3">Sheet Columns</h3>
+              <h3 className="text-sm font-semibold text-gray-300 mb-3">Sheet fields</h3>
               <div className="space-y-2">
-                {sheetColumns.map(col => (
+                {sheetColumns.map((col) => (
                   <div
                     key={col.key}
-                    className="p-2 bg-surface-800 rounded border border-surface-700 text-xs text-gray-300"
+                    className="p-2 bg-surface-800 rounded border border-surface-700 text-xs text-gray-300 font-mono"
                   >
+                    <span className="text-gray-500">{col.key}</span>
+                    <span className="text-gray-400 mx-1">·</span>
                     {col.label}
                   </div>
                 ))}

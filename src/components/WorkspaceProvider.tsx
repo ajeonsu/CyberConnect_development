@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { getSession, logoutAction } from '@/actions/auth';
 import { getProfiles, upgradeToAdminAction, getTeamMembersAction, getMyTeamMembershipsAction, getMyProfileAction, updateMyProfileAction } from '@/actions/profiles';
 import { getProjectsAction, createProjectAction, updateProjectAction, deleteProjectAction, getTeamIdBySlugAction } from '@/actions/projects';
-import { getSheetRowsAction, upsertSheetRowAction, deleteSheetRowAction } from '@/actions/rows';
+import { getSheetRowsAction, upsertSheetRowAction, deleteSheetRowAction, deleteSheetRowsBatchAction } from '@/actions/rows';
 import {
   setCachedProfiles,
   sheetTabs,
@@ -49,6 +49,7 @@ interface WorkspaceContextType {
   updateSheetRowData: (projectId: string, tabId: string, updatedRow: SheetRow) => Promise<void>;
   addSheetRow: (projectId: string, tabId: string, newRow: SheetRow) => Promise<SheetRow>;
   deleteSheetRow: (projectId: string, tabId: string, rowId: string) => Promise<void>;
+  deleteSheetRows: (projectId: string, tabId: string, rowIds: string[]) => Promise<void>;
   refreshTeamMemberships: () => Promise<void>;
   /** Admin dashboard: which project is selected in the main workspace panel. */
   selectedAdminProjectId: string | null;
@@ -531,6 +532,19 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     }));
   }, []);
 
+  const deleteSheetRows = useCallback(async (projectId: string, tabId: string, rowIds: string[]) => {
+    if (rowIds.length === 0) return
+    await deleteSheetRowsBatchAction(tabId, projectId, rowIds)
+    const idSet = new Set(rowIds)
+    setSheetData(prev => ({
+      ...prev,
+      [projectId]: {
+        ...prev[projectId],
+        [tabId]: (prev[projectId]?.[tabId] ?? []).filter(r => !idSet.has(r.id)),
+      },
+    }))
+  }, [])
+
   const visibleProjects = useMemo(() => {
     if (!loggedInUser) return [];
     if (workspaceScope === 'team') {
@@ -601,6 +615,7 @@ export function WorkspaceProvider({ children, initialProjects }: { children: Rea
     updateSheetRowData,
     addSheetRow,
     deleteSheetRow,
+    deleteSheetRows,
     refreshTeamMemberships,
     selectedAdminProjectId,
     setSelectedAdminProjectId,

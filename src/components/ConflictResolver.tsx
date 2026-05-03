@@ -91,7 +91,13 @@ export function ConflictResolver({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={onClose}>
-      <div className="bg-surface-900 border border-surface-700 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-fade-in shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="relative bg-surface-900 border border-surface-700 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-fade-in shadow-2xl" onClick={e => e.stopPropagation()}>
+        {importing && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-2xl bg-black/55 backdrop-blur-[2px]">
+            <Loader className="h-8 w-8 animate-spin text-brand-400" />
+            <p className="mt-3 text-sm text-gray-200">Importing rows…</p>
+          </div>
+        )}
         <div className="flex items-center justify-between p-6 border-b border-surface-700">
           <div>
             <h2 className="text-lg font-semibold text-white flex items-center gap-2">

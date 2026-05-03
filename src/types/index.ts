@@ -59,7 +59,7 @@ export interface SheetRow {
   [key: string]: string | number | boolean | null | undefined;
 }
 
-export type ImportRowStatus = 'pass' | 'duplicate' | 'conflict';
+export type ImportRowStatus = 'pass' | 'duplicate' | 'conflict' | 'duplicate_in_file';
 
 export interface ImportPreviewRow extends SheetRow {
   previewStatus: ImportRowStatus;

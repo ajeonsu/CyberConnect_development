@@ -27,7 +27,8 @@ export default function PersonalProjectTabPage() {
     updateSheetRow,
     updateSheetRowData,
     addSheetRow,
-    deleteSheetRow
+    deleteSheetRow,
+    deleteSheetRows,
   } = useWorkspace();
 
   const projectId = params.id as string;
@@ -127,6 +128,7 @@ export default function PersonalProjectTabPage() {
             }}
             onUpdateRow={(rowId, key, value) => updateSheetRow(projectId, tabId, rowId, key, value)}
             onDeleteRow={(rowId) => deleteSheetRow(projectId, tabId, rowId)}
+            onDeleteRows={(ids) => deleteSheetRows(projectId, tabId, ids)}
             onAddRow={() => {
               setSelectedRow(null);
               setShowAddRow(true);

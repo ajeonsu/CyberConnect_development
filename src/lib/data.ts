@@ -272,6 +272,27 @@ export function getBilingualRowFieldKey(tabId: string, key: string): string | nu
   return bilingualRowFieldMap[tabId]?.[key] ?? null;
 }
 
+/** Sheet fields available in batch-import column mapping (EN keys + `*_ja` from bilingualRowFieldMap). */
+export function getImportMappingTargetsForTab(tab: SheetTab): { key: string; label: string }[] {
+  const jaMap = bilingualRowFieldMap[tab.id] ?? {};
+  const keysSeen = new Set<string>();
+  const out: { key: string; label: string }[] = [];
+
+  for (const c of tab.columns) {
+    if (!keysSeen.has(c.key)) {
+      keysSeen.add(c.key);
+      out.push({ key: c.key, label: c.label });
+    }
+    const jaKey = jaMap[c.key];
+    if (jaKey && !keysSeen.has(jaKey)) {
+      keysSeen.add(jaKey);
+      out.push({ key: jaKey, label: `${c.label} (JA)` });
+    }
+  }
+
+  return out;
+}
+
 /** True when this column and `${key}_ja` are both real columns (do not virtual-split or locale-fallback in the grid). */
 export function columnUsesExplicitJaPair(tab: SheetTab, key: string): boolean {
   if (key.endsWith('_ja')) {
@@ -551,10 +572,14 @@ export const translations: Record<string, string> = {
   'Save Row': '保存',
   'Save Changes': '変更を保存',
   'Saving…': '保存中…',
+  'Importing rows…': 'インポート処理中…',
+  'Import completed.': 'インポートが完了しました。',
+  'Import finished with some rows failed.': 'インポートが完了しましたが、一部の行は失敗しました。',
   'Deleting…': '削除中…',
   'Navigating…': '移動中…',
   'Save failed': '保存に失敗しました',
   'Delete failed': '削除に失敗しました',
+  'Delete selected': '選択した行を削除',
   'duplicate_task_code': 'このタスクIDは既に使用されています',
   'None': 'なし',
   'No screens registered yet': '登録された画面がありません',

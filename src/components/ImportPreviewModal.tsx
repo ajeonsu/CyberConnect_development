@@ -5,12 +5,15 @@ const rowStyles: Record<ImportPreviewRow['previewStatus'], string> = {
   pass: 'bg-emerald-500/10 hover:bg-emerald-500/15 border-emerald-500/20',
   duplicate: 'bg-amber-500/10 hover:bg-amber-500/15 border-amber-500/20',
   conflict: 'bg-red-500/10 hover:bg-red-500/15 border-red-500/20',
+  duplicate_in_file: 'bg-orange-500/10 hover:bg-orange-500/15 border-orange-500/20',
 };
 
 interface Props {
   tab: SheetTab;
   rows: ImportPreviewRow[];
   totalRows: number;
+  /** Rows that will actually be inserted on Continue (no duplicates / conflicts / duplicate-in-file). */
+  rowsToImportCount: number;
   duplicateCount: number;
   conflictCount: number;
   onBack: () => void;
@@ -22,6 +25,7 @@ export function ImportPreviewModal({
   tab,
   rows,
   totalRows,
+  rowsToImportCount,
   duplicateCount,
   conflictCount,
   onBack,
@@ -53,8 +57,8 @@ export function ImportPreviewModal({
               <p className="text-2xl font-semibold text-white">{totalRows}</p>
             </div>
             <div className="p-4 bg-surface-800 rounded-lg border border-surface-700">
-              <p className="text-xs text-gray-500 mb-1">Rows in Preview</p>
-              <p className="text-2xl font-semibold text-emerald-400">{rows.length}</p>
+              <p className="text-xs text-gray-500 mb-1">Ready to import</p>
+              <p className="text-2xl font-semibold text-emerald-400">{rowsToImportCount}</p>
             </div>
             <div className="p-4 bg-surface-800 rounded-lg border border-surface-700">
               <p className="text-xs text-gray-500 mb-1">Duplicates</p>

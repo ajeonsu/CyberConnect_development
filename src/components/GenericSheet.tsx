@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { SheetTab, SheetRow, Project, ImportConflict, ImportValidationPreview } from '@/types';
 import { finalizeImportRows } from '@/actions/rows';
 import { useWorkspace } from '@/components/WorkspaceProvider';
@@ -15,7 +15,7 @@ import {
   type ProjectSheetRole,
   isTasksTab,
 } from '@/lib/data';
-import { ChevronUp, ChevronDown, Trash2, Plus, Download, Loader2 } from 'lucide-react';
+import { ChevronUp, ChevronDown, Trash2, Plus, Download, Loader2, X } from 'lucide-react';
 import { ImportModal } from './ImportModal';
 import { ImportPreviewModal } from './ImportPreviewModal';
 import { ConflictResolver } from './ConflictResolver';
@@ -32,6 +32,7 @@ interface Props {
   onSelectRow: (row: SheetRow) => void;
   onUpdateRow: (id: string, key: string, value: string) => void | Promise<void>;
   onDeleteRow: (id: string) => void | Promise<void>;
+  onDeleteRows?: (ids: string[]) => void | Promise<void>;
   onAddRow: () => void;
   selectedRowId: string | null;
 }
@@ -61,6 +62,7 @@ export function GenericSheet({
   onSelectRow,
   onUpdateRow,
   onDeleteRow,
+  onDeleteRows,
   onAddRow,
   selectedRowId,
 }: Props) {
@@ -85,16 +87,20 @@ export function GenericSheet({
   const [showConflictResolver, setShowConflictResolver] = useState(false);
   const [showImportResults, setShowImportResults] = useState(false);
   const [importResults, setImportResults] = useState<{ successful: SheetRow[]; failed: any[] }>({ successful: [], failed: [] });
+  const [importFinishing, setImportFinishing] = useState(false);
+  const [importBanner, setImportBanner] = useState<{ kind: 'success' | 'warning'; text: string } | null>(null);
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
+  const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
   const displayColumns = tab.columns.flatMap((c) => {
     const jaKey = getBilingualRowFieldKey(tab.id, c.key);
     if (!jaKey) {
       return [{ ...c, displayKey: c.key, actualKey: c.key, sourceKey: c.key, langTag: null as null | 'EN' | 'JA' }];
     }
 
-    return [
-      { ...c, displayKey: `${c.key}__en`, actualKey: c.key, sourceKey: c.key, langTag: 'EN' as const },
-      { ...c, displayKey: `${c.key}__ja`, actualKey: jaKey, sourceKey: c.key, langTag: 'JA' as const },
-    ];
+    const enCol = { ...c, displayKey: `${c.key}__en`, actualKey: c.key, sourceKey: c.key, langTag: null as null | 'EN' | 'JA' };
+    const jaCol = { ...c, displayKey: `${c.key}__ja`, actualKey: jaKey, sourceKey: c.key, langTag: null as null | 'EN' | 'JA' };
+    if (language === 'ja') return [jaCol];
+    return [enCol];
   });
 
   const handleSort = (key: string) => {
@@ -110,6 +116,7 @@ export function GenericSheet({
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
+  const sortedIds = sorted.map((r) => r.id);
   const tasks = isTasksTab(tab.id);
   const pm = projectSheetRole === 'pm';
 
@@ -128,6 +135,9 @@ export function GenericSheet({
 
   const canAddRow = tab.pmCanAddRows && (pm || (tasks && projectSheetRole === 'dev'));
   const canDeleteRow = pm || (tasks && projectSheetRole === 'dev');
+  const showBatchDelete = canDeleteRow && !!onDeleteRows;
+  const allVisibleSelected =
+    sortedIds.length > 0 && sortedIds.every((id) => selectedRowIds.has(id));
 
   const startEdit = (id: string, key: string, value: string) => {
     if (!canEditCell(key)) return;
@@ -165,6 +175,7 @@ export function GenericSheet({
     setImportTotalRows(0);
     setImportDuplicateCount(0);
     setImportResults({ successful: [], failed: [] });
+    setImportFinishing(false);
   };
 
   const handleImportMappingComplete = (result: ImportValidationPreview) => {
@@ -186,6 +197,7 @@ export function GenericSheet({
       return;
     }
 
+    setImportFinishing(true);
     try {
       const result = await finalizeImportRows(project?.id || '', tab.id, importPreviewRows, []);
       setImportResults(result);
@@ -199,6 +211,7 @@ export function GenericSheet({
         failed: [{ rowData: {}, reason: error instanceof Error ? error.message : 'Import failed' }],
       });
     } finally {
+      setImportFinishing(false);
       setShowImportResults(true);
     }
   };
@@ -215,8 +228,52 @@ export function GenericSheet({
   };
 
   const handleImportComplete = () => {
+    const ok = importResults.successful.length;
+    const bad = importResults.failed.length;
+    if (bad > 0) {
+      setImportBanner({
+        kind: 'warning',
+        text:
+          language === 'ja'
+            ? `インポート完了：成功 ${ok} 件、失敗 ${bad} 件`
+            : `Import finished: ${ok} row(s) uploaded, ${bad} failed`,
+      });
+    } else if (ok > 0) {
+      setImportBanner({ kind: 'success', text: translate('Import completed.', language) });
+    }
     resetImportFlow();
-    // Reset will be done by parent component reload
+  };
+
+  useEffect(() => {
+    if (!importBanner) return;
+    const t = window.setTimeout(() => setImportBanner(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [importBanner]);
+
+  useEffect(() => {
+    const valid = new Set(rows.map((r) => r.id));
+    setSelectedRowIds((prev) => new Set([...prev].filter((id) => valid.has(id))));
+  }, [rows]);
+
+  const toggleRowSelected = (rowId: string) => {
+    setSelectedRowIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedRowIds((prev) => {
+        const next = new Set(prev);
+        sortedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedRowIds((prev) => new Set([...prev, ...sortedIds]));
+    }
   };
 
   const handleDeleteRow = async (rowId: string) => {
@@ -231,8 +288,55 @@ export function GenericSheet({
     }
   };
 
+  const handleBatchDelete = async () => {
+    if (!onDeleteRows || selectedRowIds.size === 0) return;
+    const n = selectedRowIds.size;
+    const msg =
+      language === 'ja'
+        ? `選択した ${n} 行を削除しますか？`
+        : `Delete ${n} selected row(s)?`;
+    if (!window.confirm(msg)) return;
+    setSheetMutationError(null);
+    setPendingBatchDelete(true);
+    try {
+      await Promise.resolve(onDeleteRows([...selectedRowIds]));
+      setSelectedRowIds(new Set());
+    } catch {
+      setSheetMutationError(translate('Delete failed', language));
+    } finally {
+      setPendingBatchDelete(false);
+    }
+  };
+
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col relative">
+      {importFinishing && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-surface-700 bg-surface-900 px-8 py-6 shadow-xl">
+            <Loader2 className="h-8 w-8 animate-spin text-brand-400" />
+            <p className="text-sm text-gray-300">{translate('Importing rows…', language)}</p>
+          </div>
+        </div>
+      )}
+      {importBanner && (
+        <div
+          className={`flex shrink-0 items-center justify-between gap-2 border-b px-4 py-2 text-xs ${
+            importBanner.kind === 'success'
+              ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+              : 'border-amber-500/25 bg-amber-500/10 text-amber-200'
+          }`}
+        >
+          <span>{importBanner.text}</span>
+          <button
+            type="button"
+            onClick={() => setImportBanner(null)}
+            className="rounded p-0.5 hover:bg-white/10"
+            aria-label="Dismiss"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
       {sheetMutationError && (
         <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/20 text-xs text-red-300 shrink-0">{sheetMutationError}</div>
       )}
@@ -255,6 +359,21 @@ export function GenericSheet({
             </button>
           </>
         )}
+        {showBatchDelete && selectedRowIds.size > 0 && (
+          <button
+            type="button"
+            onClick={() => void handleBatchDelete()}
+            disabled={pendingBatchDelete}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-300 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+          >
+            {pendingBatchDelete ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="w-3.5 h-3.5" />
+            )}
+            {translate('Delete selected', language)} ({selectedRowIds.size})
+          </button>
+        )}
         <span className="text-xs text-gray-500">{rows.length} rows</span>
       </div>
 
@@ -265,6 +384,23 @@ export function GenericSheet({
               <th className="w-10 px-3 py-2.5 text-left sticky left-0 bg-surface-900 z-20">
                 <span className="text-gray-500 text-xs">#</span>
               </th>
+              {showBatchDelete && (
+                <th className="w-10 px-2 py-2.5 sticky left-10 bg-surface-900 z-20 border-r border-surface-800/80">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    ref={(el) => {
+                      if (el)
+                        el.indeterminate =
+                          !allVisibleSelected && sortedIds.some((id) => selectedRowIds.has(id));
+                    }}
+                    onChange={toggleSelectAllVisible}
+                    disabled={pendingBatchDelete || sorted.length === 0}
+                    className="rounded border-surface-600 text-brand-500 focus:ring-brand-500/40"
+                    title={language === 'ja' ? '表示中の行をすべて選択' : 'Select all visible rows'}
+                  />
+                </th>
+              )}
               {displayColumns.map(c => (
                 <th
                   key={c.displayKey}
@@ -304,6 +440,21 @@ export function GenericSheet({
                 <td className="px-3 py-2 text-xs text-gray-600 sticky left-0 bg-surface-950/80 backdrop-blur-sm">
                   {idx + 1}
                 </td>
+                {showBatchDelete && (
+                  <td
+                    className="sticky left-10 z-10 border-r border-surface-800/80 bg-surface-950/80 px-2 py-2 backdrop-blur-sm"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedRowIds.has(row.id)}
+                      onChange={() => toggleRowSelected(row.id)}
+                      disabled={pendingBatchDelete}
+                      className="rounded border-surface-600 text-brand-500 focus:ring-brand-500/40"
+                      aria-label={language === 'ja' ? '行を選択' : 'Select row'}
+                    />
+                  </td>
+                )}
                 {displayColumns.map(c => {
                   const sourceCol = tab.columns.find(col => col.key === c.sourceKey) ?? c;
                   const isTasksAssignee = tasks && sourceCol.type === 'assignee';
@@ -415,7 +566,7 @@ export function GenericSheet({
                         e.stopPropagation();
                         void handleDeleteRow(row.id);
                       }}
-                      disabled={pendingDeleteId !== null}
+                      disabled={pendingDeleteId !== null || pendingBatchDelete}
                       className="text-gray-600 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-500/10 disabled:opacity-40"
                       aria-busy={pendingDeleteId === row.id}
                     >
@@ -460,6 +611,7 @@ export function GenericSheet({
           tab={tab}
           rows={importAllRows}
           totalRows={importTotalRows}
+          rowsToImportCount={importPreviewRows.length}
           duplicateCount={importDuplicateCount}
           conflictCount={importConflicts.length}
           onBack={() => {
