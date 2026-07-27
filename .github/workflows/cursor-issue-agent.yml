@@ -1,0 +1,188 @@
+name: Cursor Issue Agent
+
+# Starts a Cursor Cloud Agent when an issue is labeled `cursor-agent`.
+# The agent works off `staging`, implements the issue, and opens a staging PR.
+#
+# NOTE: `issues` events run the workflow from the repository's DEFAULT branch.
+# This file must exist on the default branch for the trigger to fire.
+on:
+  issues:
+    types: [opened, labeled]
+
+# Serialize runs per issue so the duplicate-guard label is observed reliably.
+concurrency:
+  group: cursor-issue-agent-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  TRIGGER_LABEL: cursor-agent
+  ENQUEUED_LABEL: cursor-agent-enqueued
+  TARGET_REPO: rapture-org-dev/CyberConnect_development
+  BASE_REF: staging
+
+jobs:
+  start-cursor-agent:
+    # Only run for this repo, and only when the trigger label is present.
+    if: >-
+      github.repository == 'rapture-org-dev/CyberConnect_development' &&
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'cursor-agent') ||
+        (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'cursor-agent'))
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Duplicate-run guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          labels="$(gh issue view "$ISSUE_NUMBER" --repo "$TARGET_REPO" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$labels" | grep -qx "$ENQUEUED_LABEL"; then
+            echo "Issue #$ISSUE_NUMBER already enqueued; skipping."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reserve issue (add enqueued label)
+        if: steps.guard.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh label create "$ENQUEUED_LABEL" --repo "$TARGET_REPO" \
+            --color BFD4F2 --description "Cursor agent run enqueued" 2>/dev/null || true
+          gh issue edit "$ISSUE_NUMBER" --repo "$TARGET_REPO" --add-label "$ENQUEUED_LABEL"
+
+      - name: Start Cursor Cloud Agent
+        id: trigger
+        if: steps.guard.outputs.should_run == 'true'
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          # Issue fields are passed via env (never interpolated into the script)
+          # to avoid shell/script injection from attacker-controlled content.
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ', ') }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CURSOR_API_KEY:-}" ]; then
+            echo "::error::CURSOR_API_KEY secret is not set."
+            exit 1
+          fi
+
+          # Build the agent prompt with jq so all issue content is treated as
+          # data (no shell expansion of titles/bodies).
+          prompt="$(jq -n \
+            --arg num "$ISSUE_NUMBER" \
+            --arg title "$ISSUE_TITLE" \
+            --arg body "${ISSUE_BODY:-}" \
+            --arg url "$ISSUE_URL" \
+            --arg labels "$ISSUE_LABELS" \
+            --arg repo "$TARGET_REPO" \
+            --arg base "$BASE_REF" \
+            -r '
+              "You are an autonomous coding agent working on the repository \($repo).\n" +
+              "Implement the GitHub issue below.\n\n" +
+              "# Issue #\($num): \($title)\n" +
+              "Labels: \($labels)\n" +
+              "Issue URL: \($url)\n\n" +
+              "## Issue body\n\($body)\n\n" +
+              "## Working rules (must follow)\n" +
+              "- Base all work on the \($base) branch. Create a dedicated working branch off \($base).\n" +
+              "- Never push directly to main. Do not target or modify main.\n" +
+              "- Change ONLY what is required to satisfy this issue; keep the change in scope.\n" +
+              "- Run `npx tsc --noEmit` and make sure it passes.\n" +
+              "- Run `npm run build` and make sure it succeeds.\n" +
+              "- Open a Draft pull request that targets the \($base) branch.\n" +
+              "- In the PR description include: the issue number (#\($num)), a summary of the changes, and the results of the checks you ran (tsc + build).\n" +
+              "- If you cannot complete the issue, open the PR anyway describing what is done and what remains."
+          ')"
+
+          payload="$(jq -n \
+            --arg prompt "$prompt" \
+            --arg repo "$TARGET_REPO" \
+            --arg ref "$BASE_REF" \
+            '{
+              prompt: { text: $prompt },
+              source: { repository: ("github.com/" + $repo), ref: $ref },
+              target: { autoCreatePr: true, openAsCursorGithubApp: true }
+            }')"
+
+          http_code="$(curl -sS -o /tmp/cursor_resp.json -w '%{http_code}' \
+            -X POST "https://api.cursor.com/v0/agents" \
+            -H "Authorization: Bearer ${CURSOR_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$payload")"
+
+          echo "HTTP $http_code"
+          cat /tmp/cursor_resp.json || true
+
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "::error::Cursor Agents API returned HTTP $http_code"
+            {
+              echo "error_body<<CURSOR_EOF"
+              cat /tmp/cursor_resp.json
+              echo ""
+              echo "CURSOR_EOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          agent_id="$(jq -r '.id // .agentId // empty' /tmp/cursor_resp.json)"
+          agent_url="$(jq -r '.url // .agentUrl // empty' /tmp/cursor_resp.json)"
+          if [ -z "$agent_id" ]; then
+            echo "::error::Could not parse agent id from Cursor API response."
+            exit 1
+          fi
+          [ -n "$agent_url" ] || agent_url="https://cursor.com/agents/${agent_id}"
+          echo "agent_id=$agent_id" >> "$GITHUB_OUTPUT"
+          echo "agent_url=$agent_url" >> "$GITHUB_OUTPUT"
+
+      - name: Comment success on issue
+        if: steps.guard.outputs.should_run == 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          AGENT_ID: ${{ steps.trigger.outputs.agent_id }}
+          AGENT_URL: ${{ steps.trigger.outputs.agent_url }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" --repo "$TARGET_REPO" --body \
+          "Cursor Cloud Agent started: [\`${AGENT_ID}\`](${AGENT_URL})
+
+          The agent will work off \`${BASE_REF}\` and open a Draft PR targeting \`${BASE_REF}\` when done."
+
+      - name: Comment failure on issue
+        if: steps.guard.outputs.should_run == 'true' && failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          API_ERROR: ${{ steps.trigger.outputs.error_body }}
+        run: |
+          set -euo pipefail
+          body="Failed to start the Cursor Cloud Agent. See the [workflow run](${RUN_URL}) for details."
+          if [ -n "${API_ERROR:-}" ]; then
+            body="${body}
+
+          <details><summary>Cursor API error</summary>
+
+          \`\`\`
+          ${API_ERROR}
+          \`\`\`
+          </details>"
+          fi
+          gh issue comment "$ISSUE_NUMBER" --repo "$TARGET_REPO" --body "$body"
+          # Release the reservation so the run can be retried after fixing the cause.
+          gh issue edit "$ISSUE_NUMBER" --repo "$TARGET_REPO" --remove-label "$ENQUEUED_LABEL" || true
