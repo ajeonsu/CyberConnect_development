@@ -5,9 +5,14 @@ name: Cursor Issue Agent
 #
 # NOTE: `issues` events run the workflow from the repository's DEFAULT branch.
 # This file must exist on the default branch for the trigger to fire.
+#
+# Trigger only on the `labeled` event (and only for the `cursor-agent` label) so
+# a single issue produces exactly one run. Creating an issue with several labels
+# (as the Discord `/request` flow does) still fires a `labeled` event for the
+# `cursor-agent` label, so this flow continues to work.
 on:
   issues:
-    types: [opened, labeled]
+    types: [labeled]
 
 # Serialize runs per issue so the duplicate-guard label is observed reliably.
 concurrency:
@@ -26,13 +31,10 @@ env:
 
 jobs:
   start-cursor-agent:
-    # Only run for this repo, and only when the trigger label is present.
+    # Only run for this repo, and only when the `cursor-agent` label is added.
     if: >-
       github.repository == 'rapture-org-dev/CyberConnect_development' &&
-      (
-        (github.event.action == 'labeled' && github.event.label.name == 'cursor-agent') ||
-        (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'cursor-agent'))
-      )
+      github.event.label.name == 'cursor-agent'
     runs-on: ubuntu-latest
     steps:
       - name: Duplicate-run guard
