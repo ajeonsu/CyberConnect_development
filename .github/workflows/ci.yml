@@ -1,0 +1,55 @@
+name: CI
+
+# Type check and build for pull requests that target `staging`.
+#
+# `pull_request` runs the workflow from the PR merge commit (head), with a
+# read-only token for fork PRs and no access to real secrets. This job never
+# needs secrets: the build only requires public (`NEXT_PUBLIC_*`) values, so we
+# pass safe dummy values. Do NOT add real secrets here.
+#
+# NOTE: because `pull_request` uses the head/merge-commit version of this file,
+# it must exist on `staging` (Cursor agent branches are cut from `staging`) for
+# these checks to run on the agent's PRs.
+on:
+  pull_request:
+    branches: [staging]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Build
+        # Safe dummy values (public keys only). The Supabase client requires
+        # NEXT_PUBLIC_* to be present at build time; these are not secrets.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://dummy.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy-anon-key
+          DEEPL_AUTO_TRANSLATE: "false"
+        run: npm run build

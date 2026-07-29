@@ -1,0 +1,299 @@
+name: Cursor PR Lifecycle
+
+# Drives the Issue-centric experience for Cursor-agent PRs targeting `staging`:
+#   * announce  - comment on the source issue when the PR is opened (CI running)
+#   * verifying - flip the issue state label while CI runs
+#   * finalize  - after CI, optionally squash-merge to staging and close the issue
+#
+# Trigger placement (must live on the DEFAULT branch = main):
+#   * pull_request_target : runs the workflow file from the default branch and
+#     grants a read/write token WITHOUT checking out PR code. Used only for
+#     metadata (labels/comments) so it is safe for fork PRs. We still guard forks.
+#   * workflow_run        : consumers must live on the default branch; runs with a
+#     read/write token in the default-branch context after "CI" finishes.
+#
+# Security: PR title/body are fetched via the API and only ever read from files
+# (never interpolated into a shell command). Fork PRs are ignored for all writes.
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+    branches: [staging]
+  workflow_run:
+    workflows: ["CI"]
+    types: [in_progress, completed]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  REPO: rapture-org-dev/CyberConnect_development
+  BASE_REF: staging
+
+jobs:
+  announce:
+    name: Announce PR on issue
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.repository == 'rapture-org-dev/CyberConnect_development' &&
+      github.event.pull_request.base.ref == 'staging' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'cursor/')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: lifecycle-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Comment on issue and mark running
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          source_issue() {
+            gh pr view "$PR_NUMBER" --repo "$REPO" --json title,body > /tmp/pr.json
+            jq -r '.title + "\n" + (.body // "")' /tmp/pr.json > /tmp/prtext.txt
+            local n
+            n="$(grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[:[:space:]]*#[0-9]+' /tmp/prtext.txt | grep -oE '[0-9]+' | head -n1 || true)"
+            [ -n "$n" ] || n="$(grep -oE '#[0-9]+' /tmp/prtext.txt | grep -oE '[0-9]+' | head -n1 || true)"
+            printf '%s' "$n"
+          }
+          ISSUE="$(source_issue)"
+          if [ -z "$ISSUE" ]; then
+            echo "No issue reference found in PR #$PR_NUMBER; nothing to announce."
+            exit 0
+          fi
+          echo "Resolved source issue #$ISSUE"
+
+          gh label create cursor-agent-running --repo "$REPO" --color C5DEF5 --description "Cursor agent: PR created, pipeline running" >/dev/null 2>&1 || true
+          for l in cursor-agent-enqueued cursor-agent-verifying cursor-agent-completed cursor-agent-failed; do
+            gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$l" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label cursor-agent-running >/dev/null 2>&1 || true
+
+          MARKER="<!-- cursor-lifecycle:announce:$PR_NUMBER -->"
+          if gh issue view "$ISSUE" --repo "$REPO" --json comments --jq '.comments[].body' | grep -qF "$MARKER"; then
+            echo "Announce comment already present; skipping."
+            exit 0
+          fi
+          {
+            echo "$MARKER"
+            echo "実装PRを作成しました。"
+            echo ""
+            echo "PR: #$PR_NUMBER"
+            echo "反映先: staging"
+            echo ""
+            echo "現在、型チェックとビルドを実行しています。"
+          } > /tmp/announce.md
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file /tmp/announce.md
+
+  verifying:
+    name: Mark verifying while CI runs
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.action == 'in_progress' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency:
+      group: lifecycle-run-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - name: Flip issue label to verifying
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          case "$HEAD_BRANCH" in cursor/*) ;; *) echo "Not a cursor branch"; exit 0;; esac
+          PR="$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --base "$BASE_REF" --state open --json number --jq '.[0].number // empty')"
+          [ -n "$PR" ] || { echo "No open PR for $HEAD_BRANCH"; exit 0; }
+          gh pr view "$PR" --repo "$REPO" --json title,body > /tmp/pr.json
+          jq -r '.title + "\n" + (.body // "")' /tmp/pr.json > /tmp/prtext.txt
+          ISSUE="$(grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[:[:space:]]*#[0-9]+' /tmp/prtext.txt | grep -oE '[0-9]+' | head -n1 || true)"
+          [ -n "$ISSUE" ] || ISSUE="$(grep -oE '#[0-9]+' /tmp/prtext.txt | grep -oE '[0-9]+' | head -n1 || true)"
+          [ -n "$ISSUE" ] || { echo "No issue reference"; exit 0; }
+          gh label create cursor-agent-verifying --repo "$REPO" --color FBCA04 --description "Cursor agent: CI verifying" >/dev/null 2>&1 || true
+          for l in cursor-agent-enqueued cursor-agent-running cursor-agent-completed cursor-agent-failed; do
+            gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$l" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label cursor-agent-verifying >/dev/null 2>&1 || true
+
+  finalize:
+    name: Finalize (conditional auto-merge to staging)
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.action == 'completed' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency:
+      group: lifecycle-run-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - name: Evaluate CI result and act
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+
+          res_txt() { if [ "$1" = "success" ]; then echo "成功"; else echo "失敗"; fi; }
+          set_state() {
+            local target="$1"
+            for l in cursor-agent-enqueued cursor-agent-running cursor-agent-verifying cursor-agent-completed cursor-agent-failed; do
+              [ "$l" = "$target" ] || gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$l" >/dev/null 2>&1 || true
+            done
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label "$target" >/dev/null 2>&1 || true
+          }
+          commented() { gh issue view "$ISSUE" --repo "$REPO" --json comments --jq '.comments[].body' | grep -qF "$1"; }
+
+          # --- locate PR from the CI run's head branch (same-repo only) ---
+          case "$HEAD_BRANCH" in cursor/*) ;; *) echo "Not a cursor branch; skipping."; exit 0;; esac
+          PR="$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --base "$BASE_REF" --state all --json number --jq '.[0].number // empty')"
+          [ -n "$PR" ] || { echo "No PR found for $HEAD_BRANCH"; exit 0; }
+
+          gh pr view "$PR" --repo "$REPO" \
+            --json number,state,isDraft,baseRefName,headRefName,url,title,body > /tmp/pr.json
+          BASE="$(jq -r '.baseRefName' /tmp/pr.json)"
+          STATE="$(jq -r '.state' /tmp/pr.json)"
+          PR_URL="$(jq -r '.url' /tmp/pr.json)"
+
+          # --- guardrails: staging base only, cursor branch only, never main ---
+          if [ "$BASE" != "$BASE_REF" ]; then echo "PR base is $BASE (not $BASE_REF); skipping."; exit 0; fi
+
+          # --- resolve source issue from PR title/body (files only, no eval) ---
+          jq -r '.title + "\n" + (.body // "")' /tmp/pr.json > /tmp/prtext.txt
+          ISSUE="$(grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[:[:space:]]*#[0-9]+' /tmp/prtext.txt | grep -oE '[0-9]+' | head -n1 || true)"
+          [ -n "$ISSUE" ] || ISSUE="$(grep -oE '#[0-9]+' /tmp/prtext.txt | grep -oE '[0-9]+' | head -n1 || true)"
+          if [ -z "$ISSUE" ]; then echo "::warning::Could not resolve source issue for PR #$PR"; exit 0; fi
+          echo "PR #$PR -> issue #$ISSUE (CI: $CI_CONCLUSION)"
+
+          gh label create cursor-agent-completed --repo "$REPO" --color 0E8A16 --description "Cursor agent: completed and merged" >/dev/null 2>&1 || true
+          gh label create cursor-agent-failed    --repo "$REPO" --color B60205 --description "Cursor agent: failed"              >/dev/null 2>&1 || true
+
+          # per-job conclusions for the completion/failure report
+          gh run view "$RUN_ID" --repo "$REPO" --json jobs > /tmp/jobs.json 2>/dev/null || echo '{"jobs":[]}' > /tmp/jobs.json
+          TSC_RES="$(jq -r '.jobs[] | select((.name|ascii_downcase) | test("typecheck")) | .conclusion' /tmp/jobs.json | head -n1)"
+          BUILD_RES="$(jq -r '.jobs[] | select((.name|ascii_downcase) | test("build")) | .conclusion' /tmp/jobs.json | head -n1)"
+          [ -n "$TSC_RES" ] || TSC_RES="$CI_CONCLUSION"
+          [ -n "$BUILD_RES" ] || BUILD_RES="$CI_CONCLUSION"
+
+          # ================= CI FAILED =================
+          if [ "$CI_CONCLUSION" != "success" ]; then
+            set_state cursor-agent-failed
+            MARKER="<!-- cursor-lifecycle:failed:$RUN_ID -->"
+            if ! commented "$MARKER"; then
+              {
+                echo "$MARKER"
+                echo "CIに失敗したため、stagingへは反映していません。"
+                echo ""
+                echo "PR: #$PR ($PR_URL)"
+                echo "反映先: staging"
+                echo "型チェック: $(res_txt "$TSC_RES")"
+                echo "ビルド: $(res_txt "$BUILD_RES")"
+                echo ""
+                echo "失敗した工程の詳細: $RUN_URL"
+                echo ""
+                echo "修正後、Issueに \`cursor-agent\` ラベルを付け直すと再実行できます。"
+              } > /tmp/failed.md
+              gh issue comment "$ISSUE" --repo "$REPO" --body-file /tmp/failed.md
+            fi
+            exit 0
+          fi
+
+          # ================= CI SUCCEEDED =================
+          if [ "$STATE" = "MERGED" ]; then echo "PR already merged; skipping."; exit 0; fi
+
+          # auto-merge requires BOTH labels on the issue
+          ILABELS="$(gh issue view "$ISSUE" --repo "$REPO" --json labels --jq '.labels[].name')"
+          HAS_CURSOR=false; HAS_AUTO=false
+          printf '%s\n' "$ILABELS" | grep -qx "cursor-agent" && HAS_CURSOR=true
+          printf '%s\n' "$ILABELS" | grep -qx "auto-merge" && HAS_AUTO=true
+
+          if [ "$HAS_CURSOR" != true ] || [ "$HAS_AUTO" != true ]; then
+            # CI green but not an auto-merge target: leave PR as-is, await review
+            set_state cursor-agent-verifying
+            MARKER="<!-- cursor-lifecycle:awaiting:$PR -->"
+            if ! commented "$MARKER"; then
+              {
+                echo "$MARKER"
+                echo "CIに成功しました（型チェック: $(res_txt "$TSC_RES") / ビルド: $(res_txt "$BUILD_RES")）。"
+                echo ""
+                echo "自動マージ対象外（Issueに \`auto-merge\` ラベルがありません）のため、stagingへは反映していません。"
+                echo "PR #$PR を確認してください（反映先: staging）: $PR_URL"
+              } > /tmp/awaiting.md
+              gh issue comment "$ISSUE" --repo "$REPO" --body-file /tmp/awaiting.md
+            fi
+            exit 0
+          fi
+
+          # conflict check (mergeable may be UNKNOWN right after CI; poll briefly)
+          MERGEABLE=""
+          for _ in 1 2 3 4 5 6; do
+            MERGEABLE="$(gh pr view "$PR" --repo "$REPO" --json mergeable --jq '.mergeable')"
+            [ "$MERGEABLE" = "UNKNOWN" ] || break
+            sleep 5
+          done
+          if [ "$MERGEABLE" = "CONFLICTING" ]; then
+            set_state cursor-agent-failed
+            MARKER="<!-- cursor-lifecycle:conflict:$PR -->"
+            if ! commented "$MARKER"; then
+              {
+                echo "$MARKER"
+                echo "PR #$PR にコンフリクトがあるため、自動マージできませんでした。"
+                echo "コンフリクト解消後に再度お試しください（反映先: staging）: $PR_URL"
+                echo ""
+                echo "詳細: $RUN_URL"
+              } > /tmp/conflict.md
+              gh issue comment "$ISSUE" --repo "$REPO" --body-file /tmp/conflict.md
+            fi
+            exit 0
+          fi
+
+          # mark ready (Cursor opens Draft PRs), then squash-merge to staging
+          if [ "$(jq -r '.isDraft' /tmp/pr.json)" = "true" ]; then
+            gh pr ready "$PR" --repo "$REPO"
+          fi
+          gh pr merge "$PR" --repo "$REPO" --squash
+
+          NEWSTATE="$(gh pr view "$PR" --repo "$REPO" --json state --jq '.state')"
+          if [ "$NEWSTATE" != "MERGED" ]; then
+            set_state cursor-agent-failed
+            MARKER="<!-- cursor-lifecycle:mergefail:$PR -->"
+            if ! commented "$MARKER"; then
+              {
+                echo "$MARKER"
+                echo "PR #$PR のstagingへのマージに失敗しました。"
+                echo "詳細: $RUN_URL"
+              } > /tmp/mergefail.md
+              gh issue comment "$ISSUE" --repo "$REPO" --body-file /tmp/mergefail.md
+            fi
+            exit 1
+          fi
+
+          # merged: report completion, mark completed, close the issue
+          set_state cursor-agent-completed
+          MARKER="<!-- cursor-lifecycle:completed:$PR -->"
+          if ! commented "$MARKER"; then
+            SUMMARY="$(jq -r '.title' /tmp/pr.json)"
+            {
+              echo "$MARKER"
+              echo "実装が完了し、stagingへ反映しました。"
+              echo ""
+              echo "PR: #$PR ($PR_URL)"
+              echo "反映先: staging"
+              echo "型チェック: $(res_txt "$TSC_RES")"
+              echo "ビルド: $(res_txt "$BUILD_RES")"
+              echo "マージ: 完了 (squash)"
+              echo ""
+              echo "変更内容:"
+              echo "- $SUMMARY"
+            } > /tmp/completed.md
+            gh issue comment "$ISSUE" --repo "$REPO" --body-file /tmp/completed.md
+          fi
+          gh issue close "$ISSUE" --repo "$REPO" --reason completed >/dev/null 2>&1 || true
