@@ -1,0 +1,216 @@
+name: PR Preview Smoke
+
+# Phase 1: after CI succeeds on a Cursor-agent PR (base = staging), visit the
+# deployed Vercel Preview /login page with Playwright, screenshot it, and report
+# the result on the source issue. This does NOT gate auto-merge and does NOT
+# touch cursor-pr-lifecycle.yml.
+#
+# Security model:
+# - Triggered via workflow_run, so it runs the TRUSTED workflow + Playwright
+#   code from the default branch (main). The PR head is never checked out and
+#   no PR-authored npm script runs in this secret-bearing context.
+# - Only same-repo (non-fork) Cursor PRs are processed. The Preview URL is the
+#   only PR-influenced input and is validated to be a *.vercel.app host taken
+#   from the matched GitHub Deployment status.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  deployments: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: preview-smoke-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  preview-smoke:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'cursor/')
+    runs-on: ubuntu-latest
+    env:
+      REPO: ${{ github.repository }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RUN_ID: ${{ github.run_id }}
+      TARGET_ENV: ${{ vars.SCREEN_CHECK_VERCEL_ENVIRONMENT || 'cyberconnect_staging' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # Trusted code from the default branch (main). Never the PR head.
+      - name: Checkout trusted (default branch) code
+        uses: actions/checkout@v4
+
+      - name: Resolve target PR and source issue
+        id: pr
+        run: |
+          echo "STAGE=resolve-pr" >> "$GITHUB_ENV"
+          set -euo pipefail
+
+          case "$HEAD_BRANCH" in
+            cursor/*) ;;
+            *) echo "Not a cursor/* branch; skipping."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+
+          PR="$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --base staging --state all \
+            --json number,baseRefName,url,title,body --limit 1 --jq '.[0] // empty' > /tmp/pr.json && jq -r '.number // empty' /tmp/pr.json)"
+          if [ -z "$PR" ]; then
+            echo "No staging PR found for $HEAD_BRANCH; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BASE="$(jq -r '.baseRefName // ""' /tmp/pr.json)"
+          if [ "$BASE" != "staging" ]; then
+            echo "PR base is '$BASE' (not staging); skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PR_URL="$(jq -r '.url // ""' /tmp/pr.json)"
+
+          # Resolve source issue from PR title/body (file-based, never eval'd).
+          jq -r '.title + "\n" + (.body // "")' /tmp/pr.json > /tmp/prtext.txt
+          ISSUE="$(grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[:[:space:]]*#[0-9]+' /tmp/prtext.txt | grep -oE '[0-9]+' | head -n1 || true)"
+          [ -n "$ISSUE" ] || ISSUE="$(grep -oE '#[0-9]+' /tmp/prtext.txt | grep -oE '[0-9]+' | head -n1 || true)"
+          if [ -z "$ISSUE" ]; then
+            echo "::warning::Could not resolve a source issue for PR #$PR; will run checks but skip issue comment."
+          fi
+
+          {
+            echo "skip=false"
+            echo "pr_number=$PR"
+            echo "pr_url=$PR_URL"
+            echo "issue_number=$ISSUE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved PR #$PR (base=$BASE) -> issue #${ISSUE:-<none>}"
+
+      - name: Setup Node
+        if: steps.pr.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.pr.outputs.skip != 'true'
+        run: |
+          echo "STAGE=deps" >> "$GITHUB_ENV"
+          npm ci
+
+      - name: Install Playwright browser
+        if: steps.pr.outputs.skip != 'true'
+        run: |
+          echo "STAGE=playwright-setup" >> "$GITHUB_ENV"
+          npx playwright install --with-deps chromium
+
+      - name: Resolve Vercel Preview URL
+        id: preview
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          POLL_INTERVAL: "10"
+          MAX_WAIT: "600"
+        run: |
+          echo "STAGE=preview" >> "$GITHUB_ENV"
+          set -euo pipefail
+          url="$(bash scripts/resolve-preview-url.sh)"
+          echo "PREVIEW_URL=$url" >> "$GITHUB_ENV"
+          echo "preview_url=$url" >> "$GITHUB_OUTPUT"
+          # Log host only (not query/fragment) for debugging.
+          echo "Resolved preview host: $(printf '%s' "$url" | sed -E 's#^[a-zA-Z]+://##; s#[/?#].*$##')"
+
+      - name: Run Playwright smoke test
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          echo "STAGE=playwright-run" >> "$GITHUB_ENV"
+          npm run test:e2e:smoke
+
+      - name: Upload Playwright artifacts
+        if: always() && steps.pr.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-smoke-pr-${{ steps.pr.outputs.pr_number || github.event.workflow_run.head_sha }}
+          path: |
+            playwright-report/**
+            test-results/**
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Comment success on issue
+        if: success() && steps.pr.outputs.skip != 'true' && steps.pr.outputs.issue_number != ''
+        env:
+          ISSUE: ${{ steps.pr.outputs.issue_number }}
+          PR: ${{ steps.pr.outputs.pr_number }}
+          PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+        run: |
+          set -euo pipefail
+          MARKER="<!-- cursor-preview-smoke:success:$RUN_ID -->"
+          if gh issue view "$ISSUE" --repo "$REPO" --json comments --jq '.comments[].body' | grep -qF "$MARKER"; then
+            echo "Success comment already present; skipping."
+            exit 0
+          fi
+          {
+            echo "$MARKER"
+            echo "画面確認に成功しました。"
+            echo ""
+            echo "確認対象: Vercel Preview"
+            echo "確認画面: /login"
+            echo "確認項目:"
+            echo "・CyberConnect Platform 表示"
+            echo "・Sign in ボタン表示"
+            echo ""
+            echo "Preview URL: ${PREVIEW_URL}"
+            echo "GitHub Actions: ${RUN_URL}"
+            echo "スクリーンショットおよびPlaywrightレポートはActions Artifactに保存されています。"
+            echo ""
+            echo "※現在、この画面確認結果は自動マージ条件には使用していません。"
+          } > /tmp/success.md
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file /tmp/success.md
+
+      - name: Comment failure on issue
+        if: failure() && steps.pr.outputs.skip != 'true' && steps.pr.outputs.issue_number != ''
+        env:
+          ISSUE: ${{ steps.pr.outputs.issue_number }}
+          PR: ${{ steps.pr.outputs.pr_number }}
+          PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+        run: |
+          set -euo pipefail
+          case "${STAGE:-unknown}" in
+            resolve-pr)        FAIL_STAGE="元PR/Issueの特定" ;;
+            deps)              FAIL_STAGE="Playwright起動（依存インストール）" ;;
+            playwright-setup)  FAIL_STAGE="Playwright起動（ブラウザ準備）" ;;
+            preview)           FAIL_STAGE="Vercel Preview取得 / Deployment完了待機 / Preview URL取得" ;;
+            playwright-run)    FAIL_STAGE="ページアクセス / 要素確認 / Playwright実行" ;;
+            *)                 FAIL_STAGE="不明な工程" ;;
+          esac
+          MARKER="<!-- cursor-preview-smoke:failed:$RUN_ID -->"
+          if gh issue view "$ISSUE" --repo "$REPO" --json comments --jq '.comments[].body' | grep -qF "$MARKER"; then
+            echo "Failure comment already present; skipping."
+            exit 0
+          fi
+          {
+            echo "$MARKER"
+            echo "画面確認に失敗しました。"
+            echo ""
+            echo "失敗工程: ${FAIL_STAGE}"
+            if [ -n "${PREVIEW_URL:-}" ]; then
+              echo "Preview URL: ${PREVIEW_URL}"
+            fi
+            echo "GitHub Actions: ${RUN_URL}"
+            echo ""
+            echo "スクリーンショット、Playwrightレポート、ログはActions Artifactに保存されています。"
+            echo ""
+            echo "※画面確認に失敗しても、現在の自動マージ処理には影響しません。"
+          } > /tmp/failure.md
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file /tmp/failure.md

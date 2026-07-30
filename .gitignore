@@ -7,6 +7,13 @@ build/
 .DS_Store
 *.log
 *.tsbuildinfo
+
+# Playwright (Phase 1 preview smoke) — never commit test output/screenshots
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 Untitled
 images/fuck.jpg
 images/ugh.jpg
