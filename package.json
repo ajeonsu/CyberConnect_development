@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:ai-dev": "npx --yes tsx src/server/ai-dev/selfcheck.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",
