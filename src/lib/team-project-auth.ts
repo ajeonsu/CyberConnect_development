@@ -78,3 +78,8 @@ export function canUpdateTeamProjectMetadata(priv: TeamProjectPrivilege): boolea
 export function canDeleteTeamProject(priv: TeamProjectPrivilege): boolean {
   return priv === 'team_manage' || priv === 'project_pm';
 }
+
+/** PM, developers, and team admins may start AI implementation. Clients may not. */
+export function canStartAiDev(priv: TeamProjectPrivilege): boolean {
+  return priv === 'team_manage' || priv === 'project_pm' || priv === 'project_dev';
+}

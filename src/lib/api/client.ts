@@ -330,6 +330,69 @@ export async function listProjectGitHubIssuesAction(
   return apiFetch(`/api/projects/github-issues?${q.toString()}`)
 }
 
+export type AiDevRunPublic = {
+  id: string
+  projectId: string
+  taskId: string
+  githubOwner: string
+  githubRepo: string
+  baseBranch: string
+  baseSha: string
+  cursorAgentId: string | null
+  cursorAgentUrl: string | null
+  cursorBranchName: string | null
+  status: string
+  prNumber: number | null
+  prUrl: string | null
+  prState: string
+  prHeadSha: string | null
+  ciStatus: string
+  ciSummary: Record<string, unknown>
+  errorCode: string | null
+  errorMessage: string | null
+  promptVersion: string
+  startedBy: string
+  startedAt: string
+  completedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AiDevCatalogResponse = {
+  enabled: boolean
+  canStart: boolean
+  repos: Array<{ id: string; githubOwner: string; githubRepo: string; defaultBaseBranch: string }>
+  runs?: AiDevRunPublic[]
+}
+
+export async function getAiDevCatalogAction(
+  projectId: string,
+  taskId?: string
+): Promise<AiDevCatalogResponse> {
+  const q = new URLSearchParams({ projectId })
+  if (taskId) q.set('taskId', taskId)
+  return apiFetch(`/api/ai-dev/runs?${q.toString()}`)
+}
+
+export async function startAiDevRunAction(
+  projectId: string,
+  taskId: string,
+  aiDevRepoId: string
+): Promise<{ run: AiDevRunPublic }> {
+  return apiFetch('/api/ai-dev/runs', {
+    method: 'POST',
+    body: JSON.stringify({ projectId, taskId, aiDevRepoId }),
+  })
+}
+
+export async function getAiDevRunAction(
+  runId: string,
+  projectId: string
+): Promise<{ run: AiDevRunPublic }> {
+  const q = new URLSearchParams({ projectId })
+  return apiFetch(`/api/ai-dev/runs/${encodeURIComponent(runId)}?${q.toString()}`)
+}
+
 export async function translateBilingualFieldAction(
   tabId: string,
   enKey: string,

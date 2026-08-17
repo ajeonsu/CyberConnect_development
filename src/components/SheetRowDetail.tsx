@@ -23,6 +23,7 @@ import {
 } from '@/lib/bilingualFields';
 import { BilingualFieldPairEditor } from '@/components/BilingualFieldPairEditor';
 import { TaskGitHubIssuePanel } from '@/components/TaskGitHubIssuePanel';
+import { TaskAiDevPanel } from '@/components/TaskAiDevPanel';
 import { useWorkspace } from '@/components/WorkspaceProvider';
 import { formatProjectGitHubReposLabel, listGitHubReposForProject, formatGitHubOwnerRepo } from '@/lib/githubRepo';
 import { X, Save, Loader2 } from 'lucide-react';
@@ -169,7 +170,8 @@ export function SheetRowDetail({
         <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
           {/* Outside the save form: Link/Create must not be tied to Save Changes / Enter. */}
           {isTasksTab(tab.id) && project?.id ? (
-            <TaskGitHubIssuePanel
+            <>
+              <TaskGitHubIssuePanel
               projectId={project.id}
               row={{ ...(formData as SheetRow), id: row.id, project_id: project.id }}
               language={language}
@@ -183,7 +185,14 @@ export function SheetRowDetail({
                 applySheetRowLocal(project.id, tab.id, updated);
               }}
             />
-          ) : null}
+            <TaskAiDevPanel
+              projectId={project.id}
+              taskId={String(row.id)}
+              language={language}
+              taskTitle={String(formData.task || formData.task_ja || '')}
+            />
+          </>
+        ) : null}
           <form id="sheet-row-detail-form" onSubmit={handleSave} className="space-y-4">
           {tab.columns.map(col => {
             const mergedJaKey = getBilingualRowFieldKey(tab.id, col.key);
