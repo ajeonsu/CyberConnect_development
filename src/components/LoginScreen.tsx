@@ -296,6 +296,7 @@ function LoginScreenContent({ onLogin }: Props) {
                   <label className="block text-sm font-medium text-gray-300 mb-2">Email</label>
                   <input
                     type="email"
+                    autoComplete="email"
                     value={loginEmail}
                     onChange={e => setLoginEmail(e.target.value)}
                     placeholder="you@gmail.com"
@@ -306,6 +307,7 @@ function LoginScreenContent({ onLogin }: Props) {
                   <label className="block text-sm font-medium text-gray-300 mb-2">Password</label>
                   <input
                     type="password"
+                    autoComplete="current-password"
                     value={loginPassword}
                     onChange={e => setLoginPassword(e.target.value)}
                     placeholder="Your password"
