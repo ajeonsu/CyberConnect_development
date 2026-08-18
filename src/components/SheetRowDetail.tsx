@@ -15,6 +15,7 @@ import {
   isTasksTab,
 } from '@/lib/data';
 import { RegisteredCodePicker } from '@/components/RegisteredCodePicker';
+import { TaskAiDevPanel } from '@/components/TaskAiDevPanel';
 import { X, Save, Loader2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -148,6 +149,14 @@ export function SheetRowDetail({
           </div>
         )}
         <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
+          {isTasksTab(tab.id) && project?.id ? (
+            <TaskAiDevPanel
+              projectId={project.id}
+              taskId={String(row.id)}
+              language={language}
+              taskTitle={String(formData.task || formData.task_ja || '')}
+            />
+          ) : null}
           {tab.columns.map(col => {
             const mergedJaKey = getBilingualRowFieldKey(tab.id, col.key);
             if (mergedJaKey && shouldRenderMergedBilingualBlock(tab, col.key)) {

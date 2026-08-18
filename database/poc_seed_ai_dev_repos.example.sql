@@ -1,0 +1,31 @@
+-- ================================================================================
+-- EXAMPLE seed for Staging PoC ONLY. Do not run on Production.
+-- Do not execute this file as-is. A human must replace every placeholder
+-- after reviewing Staging project / team / GitHub App installation IDs.
+--
+-- This INSERT does not modify existing task_rows or projects.github_repos.
+-- ================================================================================
+--
+-- INSERT INTO public.ai_dev_repos (
+--   team_id,
+--   project_id,
+--   github_owner,
+--   github_repo,
+--   installation_id,
+--   default_base_branch,
+--   allowed_base_branches,
+--   denied_branches,
+--   enabled,
+--   cursor_enabled
+-- ) VALUES (
+--   '<STAGING_TEAM_UUID>',
+--   '<STAGING_PROJECT_UUID>',
+--   '<github-owner>',
+--   '<mock-customer-repo>',
+--   0, -- GitHub App installation_id
+--   'develop',
+--   ARRAY['develop']::text[],
+--   ARRAY['production', 'release', 'prod']::text[],
+--   true,
+--   true
+-- );
